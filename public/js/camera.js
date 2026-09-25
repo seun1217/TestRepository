@@ -95,7 +95,12 @@ export async function startCamera(videoEl, { facingMode = "environment" } = {}) 
     }
   }
 
-  await waitForVideoSize(videoEl, READY_TIMEOUT_MS);
+  // 스트림은 받았는데 프레임이 오지 않으면(다른 앱이 카메라를 쥐고 있을 때 등) 성공으로 보고하지 않는다.
+  if (!(await waitForVideoSize(videoEl, READY_TIMEOUT_MS))) {
+    stopCamera(stream);
+    videoEl.srcObject = null;
+    throw makeError("no_frames");
+  }
 
   const track = stream.getVideoTracks()[0] || null;
   let torchSupported = false;
@@ -184,6 +189,9 @@ export async function setTorch(track, on) {
   if (!track || typeof track.applyConstraints !== "function") return false;
   try {
     await track.applyConstraints({ advanced: [{ torch: !!on }] });
+    // advanced 제약은 만족할 수 없으면 조용히 건너뛰므로, 실제로 적용됐는지 설정값으로 확인한다.
+    const settings = typeof track.getSettings === "function" ? track.getSettings() : null;
+    if (settings && "torch" in settings) return settings.torch === !!on;
     return true;
   } catch {
     return false;

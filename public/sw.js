@@ -18,10 +18,13 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(event.request)
       .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(event.request, copy)).catch(() => {});
+        // 배포 중의 오류 응답이나 다른 출처의 응답은 캐시하지 않는다.
+        if (res.ok && url.origin === self.location.origin) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(event.request, copy)).catch(() => {});
+        }
         return res;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => caches.match(event.request).then((hit) => hit || Response.error()))
   );
 });

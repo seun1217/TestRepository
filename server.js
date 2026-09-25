@@ -9,13 +9,17 @@ const PORT = Number(process.env.PORT || 3000);
 const PROVIDER_NAME = (process.env.IDENTIFY_PROVIDER || "claude").toLowerCase();
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5";
 
-// 프록시 뒤에서만 X-Forwarded-For를 믿는다. TRUST_PROXY=1 (hop 수), true, 또는 "loopback, 10.0.0.0/8" 같은 목록.
+// 프록시 뒤에서만 X-Forwarded-For를 믿는다. TRUST_PROXY=1 (hop 수) 또는 "loopback, 10.0.0.0/8" 같은 목록.
+// "true"는 클라이언트가 보낸 X-Forwarded-For의 첫 항목을 그대로 믿어 요청 제한을 우회당하므로 hop 1로 낮춘다.
 function parseTrustProxy(raw) {
   if (raw == null || String(raw).trim() === "") return null;
   const v = String(raw).trim();
   if (/^\d+$/.test(v)) return Number(v);
-  if (v === "true") return true;
-  if (v === "false") return false;
+  if (v === "true") {
+    console.warn("[config] TRUST_PROXY=true is unsafe (spoofable X-Forwarded-For); using hop count 1 instead");
+    return 1;
+  }
+  if (v === "false") return null;
   return v;
 }
 const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
@@ -32,7 +36,31 @@ const RATE_WINDOW_MS = 60_000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const MIN_CONFIDENCE = 0.35;
-const MAX_PLANT_TEXT = 120; // describe 요청의 name_ko, name_sci, id 최대 길이
+const MAX_PLANT_TEXT = 120;
+const MAX_IMAGE_SIDE = 8192;
+
+// base64 앞부분을 디코딩해 선언된 형식과 실제 바이트가 맞는지 확인한다 (상위 API의 400을 미리 막는다).
+function magicMatches(base64, mediaType) {
+  let head;
+  try {
+    head = Buffer.from(base64.slice(0, 32), "base64");
+  } catch {
+    return false;
+  }
+  if (head.length < 12) return false;
+  switch (mediaType) {
+    case "image/jpeg":
+      return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+    case "image/png":
+      return head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+    case "image/gif":
+      return head.toString("latin1", 0, 3) === "GIF";
+    case "image/webp":
+      return head.toString("latin1", 0, 4) === "RIFF" && head.toString("latin1", 8, 12) === "WEBP";
+    default:
+      return false;
+  }
+} // describe 요청의 name_ko, name_sci, id 최대 길이
 const MAX_PLANTS = 6;
 
 const QUALITY_MESSAGES = {
@@ -60,7 +88,7 @@ app.use("/api", (_req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
-app.use(express.json({ limit: "6mb" }));
+const jsonBody = express.json({ limit: "6mb" }); // 요청 제한을 통과한 뒤에만 본문을 읽는다
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, provider: PROVIDER_NAME, model: MODEL });
@@ -77,14 +105,22 @@ function clamp01(v) {
 }
 
 // bbox를 0..1로 클램프하고 w, h는 이미지 가장자리에서 자른다.
-function clampBBox(b) {
-  const x = clamp01(b?.x);
-  const y = clamp01(b?.y);
-  return { x, y, w: Math.min(clamp01(b?.w), 1 - x), h: Math.min(clamp01(b?.h), 1 - y) };
+// 모델이 지시를 어기고 픽셀 좌표를 주면(값이 1.5를 넘음) 이미지 크기로 나눠 정규화한 뒤 클램프한다.
+function clampBBox(b, size) {
+  let { x, y, w, h } = b || {};
+  if (size && [x, y, w, h].some((v) => Number(v) > 1.5)) {
+    x = Number(x) / size.width;
+    w = Number(w) / size.width;
+    y = Number(y) / size.height;
+    h = Number(h) / size.height;
+  }
+  const cx = clamp01(x);
+  const cy = clamp01(y);
+  return { x: cx, y: cy, w: Math.min(clamp01(w), 1 - cx), h: Math.min(clamp01(h), 1 - cy) };
 }
 
 // 제공자 응답을 계약(docs/CONTRACT.md)에 맞게 정규화한다.
-export function normalizeResponse(raw, model) {
+export function normalizeResponse(raw, model, size = null) {
   const out = {
     quality: "ok",
     message_ko: null,
@@ -111,7 +147,7 @@ export function normalizeResponse(raw, model) {
         name_en: String(p?.name_en || "").trim(),
         family_ko: String(p?.family_ko || "").trim(),
         confidence: clamp01(p?.confidence),
-        bbox: clampBBox(p?.bbox),
+        bbox: clampBBox(p?.bbox, size),
         summary_ko: String(p?.summary_ko || "").trim(),
         // 1단계에서는 비어 있을 수 있다 (계약 2절). 클라이언트가 비어 있을 때만 describe를 부른다.
         detail_ko: String(p?.detail_ko || "").trim(),
@@ -132,7 +168,7 @@ export function normalizeResponse(raw, model) {
   return out;
 }
 
-const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 // 메모리 고정 윈도우 요청 제한 (IP당 분당 RATE_LIMIT_PER_MIN회). 프로세스 하나 기준이며 재시작하면 초기화된다.
 const rateBuckets = new Map();
@@ -180,9 +216,12 @@ function parseImageRequest(body) {
   if (!image) return { error: "이미지가 비어 있습니다." };
   if (!BASE64_RE.test(image)) return { error: "이미지 형식이 올바르지 않습니다." };
   if (image.length * 0.75 > MAX_IMAGE_BYTES) return { error: "이미지가 너무 큽니다." };
-  const width = Number.parseInt(body.width, 10);
-  const height = Number.parseInt(body.height, 10);
-  if (!(width > 0 && height > 0)) return { error: "이미지 크기 정보가 필요합니다." };
+  const width = Number(body.width);
+  const height = Number(body.height);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE) {
+    return { error: "이미지 크기 정보가 필요합니다." };
+  }
+  if (!magicMatches(image, mediaType)) return { error: "이미지 형식이 올바르지 않습니다." };
   const lang = body.lang === "ko" || body.lang == null ? "ko" : String(body.lang);
   return { image, mediaType, width, height, lang };
 }
@@ -217,7 +256,7 @@ function sendProviderError(res, route, err, fallbackMessage) {
   sendError(res, [400, 401, 429, 502, 503].includes(status) ? status : 502, code, message_ko);
 }
 
-app.post("/api/identify", rateLimitApi, async (req, res) => {
+app.post("/api/identify", rateLimitApi, jsonBody, async (req, res) => {
   const body = req.body || {};
   const input = parseImageRequest(body);
   if (input.error) return sendError(res, 400, "bad_request", input.error);
@@ -231,14 +270,14 @@ app.post("/api/identify", rateLimitApi, async (req, res) => {
       lang: input.lang,
       debug: PROVIDER_NAME === "mock" ? body.debug : undefined,
     });
-    res.json(normalizeResponse(raw, MODEL));
+    res.json(normalizeResponse(raw, MODEL, { width: input.width, height: input.height }));
   } catch (err) {
     sendProviderError(res, "identify", err, "식물 인식 서버에 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.");
   }
 });
 
 // 2단계: 툴팁을 터치했을 때 식물 하나의 상세 설명을 받는다 (계약 2절 /api/describe).
-app.post("/api/describe", rateLimitApi, async (req, res) => {
+app.post("/api/describe", rateLimitApi, jsonBody, async (req, res) => {
   const body = req.body || {};
   const input = parseImageRequest(body);
   if (input.error) return sendError(res, 400, "bad_request", input.error);

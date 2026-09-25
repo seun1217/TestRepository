@@ -330,7 +330,7 @@ test("tooltips are re-laid out inside the viewport after a resize", async ({ pag
   await expect(page.locator("#status")).toContainText("동백나무, 수국");
 });
 
-test("flat scene is judged blurry locally and sends no request", async ({ page }) => {
+test("flat scene is judged blurry locally, sends nothing during the grace window, then defers to the server", async ({ page }) => {
   await installFakeCamera(page, "flat");
   const requests = countIdentifyRequests(page);
   const t0 = Date.now();
@@ -343,4 +343,8 @@ test("flat scene is judged blurry locally and sends no request", async ({ page }
   await page.waitForTimeout(Math.max(0, 3000 - (Date.now() - t0)));
   expect(requests.count).toBe(0);
   await expect(page.locator("#overlay .plant-tip")).toHaveCount(0);
+
+  // 정지 화면이 4초 넘게 계속 흐림이면 질감이 적은 장면으로 보고 한 번 서버에 보낸다 (계약 4절 scanner 규칙).
+  await expect.poll(() => requests.count, { timeout: 8000 }).toBe(1);
+  await expect(page.locator("#overlay .plant-tip")).toHaveCount(2);
 });

@@ -209,8 +209,10 @@ test("a late describe response for a previous plant never overwrites the plant n
     await page.waitForTimeout(100);
   }
   // 늦은 응답은 실제로 도착해 캐시에는 들어갔다 (무시된 것이지 안 온 것이 아니다).
-  expect(describes.count).toBe(2);
-  expect(await page.evaluate(() => window.__gardenLens.lastResult.plants.map((p) => p.detail_ko))).toEqual([P1_TEXT, P2_TEXT]);
+  await expect.poll(() => describes.count, { timeout: 5000 }).toBe(2);
+  await expect
+    .poll(() => page.evaluate(() => window.__gardenLens.lastResult.plants.map((p) => p.detail_ko)), { timeout: 5000 })
+    .toEqual([P1_TEXT, P2_TEXT]);
   await expect(paragraphsOf(page)).toHaveText([P2_TEXT]);
 });
 

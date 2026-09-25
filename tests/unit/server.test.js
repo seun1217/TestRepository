@@ -129,6 +129,22 @@ describe("server: POST /api/identify", () => {
     for (const p of json.plants) assert.ok(p.detail_ko.length > 0);
   });
 
+  test("bytes that do not match the declared media type -> 400", async () => {
+    const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82]).toString("base64");
+    const { res, json } = await postIdentify(base, { ...goodBody, image: pngHeader });
+    assert.equal(res.status, 400);
+    assert.match(json.error.message_ko, /형식/);
+    const asPng = await postIdentify(base, { ...goodBody, image: `data:image/png;base64,${pngHeader}` });
+    assert.equal(asPng.res.status, 200);
+  });
+
+  test("width/height must be integers within 1..8192", async () => {
+    for (const size of [{ width: "12abc", height: 100 }, { width: 100, height: 1e12 }, { width: 10.5, height: 100 }]) {
+      const { res } = await postIdentify(base, { ...goodBody, ...size });
+      assert.equal(res.status, 400, JSON.stringify(size));
+    }
+  });
+
   test("data URL prefix is accepted", async () => {
     const { res, json } = await postIdentify(base, { ...goodBody, image: `data:image/jpeg;base64,${JPEG_B64}` });
     assert.equal(res.status, 200);
@@ -287,6 +303,15 @@ describe("rate limit shared between identify and describe (RATE_LIMIT_PER_MIN=3)
     const fifthIdentify = await postIdentify(base, goodBody);
     assert.equal(fifthIdentify.res.status, 429);
     assert.equal(fifthIdentify.json.error.code, "rate_limited");
+  });
+});
+
+describe("normalizeResponse with pixel bboxes", () => {
+  test("pixel coordinates from the model are normalized by the image size instead of clamped away", () => {
+    const raw = { quality: "ok", plants: [{ name_ko: "동백나무", confidence: 0.9, bbox: { x: 64, y: 48, w: 320, h: 240 } }] };
+    const out = normalizeResponse(raw, "m", { width: 640, height: 480 });
+    assert.equal(out.quality, "ok");
+    assert.deepEqual(out.plants[0].bbox, { x: 0.1, y: 0.1, w: 0.5, h: 0.5 });
   });
 });
 

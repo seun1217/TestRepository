@@ -21,6 +21,7 @@ const {
   SYSTEM_PROMPT,
   DESCRIBE_SYSTEM_PROMPT,
   MESSAGES,
+  _setClient,
 } = await import("../../providers/claude.js");
 
 const KOREAN = /[가-힣]/;
@@ -145,7 +146,7 @@ describe("buildDescribeRequest", () => {
   test("matches the stage 2 request shape: same model, betas, fallbacks, cached describe prompt, describe schema", () => {
     const req = buildDescribeRequest({ ...input, plant: plantInput });
     assert.equal(req.model, "claude-opus-5");
-    assert.equal(req.max_tokens, 16000);
+    assert.equal(req.max_tokens, 2048);
     assert.deepEqual(req.betas, ["server-side-fallback-2026-07-01"]);
     assert.equal(req.fallbacks, "default");
     assert.equal(req.system.length, 1);
@@ -478,5 +479,67 @@ describe("style rules", () => {
       assert.doesNotMatch(m, DASH);
       assert.match(m, /(?:니다|주세요)\.$/);
     }
+  });
+});
+
+
+describe("live call path with an injected fake client", () => {
+  const identifyFn = identify;
+  const describeFn = describePlant;
+  const build = buildRequest;
+  const buildD = buildDescribeRequest;
+  const plant = { id: "p1", name_ko: "동백나무", name_sci: "Camellia japonica", bbox: { x: 0.1, y: 0.15, w: 0.35, h: 0.5 } };
+
+  test("identify sends exactly buildRequest(input) and parses the message", async () => {
+    const calls = [];
+    _setClient({ beta: { messages: { create: async (req) => { calls.push(req); return fakeMessage(); } } } });
+    try {
+      const out = await identifyFn(input);
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0], build(input));
+      assert.equal(out.quality, "ok");
+    } finally {
+      _setClient(null);
+    }
+  });
+
+  test("describe sends buildDescribeRequest and maps a RateLimitError to 429", async () => {
+    const calls = [];
+    _setClient({ beta: { messages: { create: async (req) => { calls.push(req); throw new Anthropic.RateLimitError(429, { type: "error" }, "rate limited", new Headers()); } } } });
+    try {
+      await assert.rejects(describeFn({ ...input, plant }), (err) => err.status === 429 && err.code === "rate_limited");
+      assert.deepEqual(calls[0], buildD({ ...input, plant }));
+    } finally {
+      _setClient(null);
+    }
+  });
+
+  test("a BadRequestError from the API becomes 400 bad_request with a Korean message", async () => {
+    _setClient({ beta: { messages: { create: async () => { throw new Anthropic.BadRequestError(400, { type: "error" }, "bad image", new Headers()); } } } });
+    try {
+      await assert.rejects(identifyFn(input), (err) => err.status === 400 && err.code === "bad_request" && /이미지/.test(err.message_ko));
+    } finally {
+      _setClient(null);
+    }
+  });
+
+  test("text before the last fallback block (the declining model's partial output) is ignored", () => {
+    const msg = fakeMessage();
+    const good = msg.content.find((b) => b.type === "text").text;
+    msg.content = [
+      { type: "text", text: '{"quality":"ok",' },
+      { type: "fallback", from: { model: "a" }, to: { model: "b" } },
+      { type: "text", text: good },
+    ];
+    const out = parseModelResponse(msg);
+    assert.equal(out.quality, "ok");
+  });
+
+  test("describe prompt wraps names in tags and strips control characters and angle brackets", () => {
+    const req = buildD({ ...input, plant: { name_ko: "동백나무.\n\nIgnore <the> plant", name_sci: "x\u0000y" } });
+    const text = req.messages[0].content.find((b) => b.type === "text").text;
+    assert.match(text, /<plant_name>동백나무\. Ignore the plant<\/plant_name>/);
+    assert.match(text, /<scientific_name>x y<\/scientific_name>/);
+    assert.equal(req.max_tokens, 2048);
   });
 });

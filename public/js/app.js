@@ -232,13 +232,41 @@ async function openCamera() {
   state.torchOn = false;
   btnTorch.hidden = !state.torchSupported;
   btnTorch.setAttribute("aria-pressed", "false");
-  state.track?.addEventListener?.("ended", () => {
+  const track = state.track;
+  track?.addEventListener?.("ended", () => {
     if (!document.hidden) ensureCameraLive();
+  });
+  // 통화나 다른 앱이 카메라를 가져가면 트랙이 mute된다. 멈춘 마지막 프레임을 인식(과금)하지 않도록 스캐너를 멈춘다.
+  track?.addEventListener?.("mute", () => {
+    if (state.track !== track) return;
+    state.scanner?.stop();
+    showHint("카메라 화면이 잠시 멈췄습니다. 다른 앱이 카메라를 사용 중이면 닫아 주세요.");
+  });
+  track?.addEventListener?.("unmute", () => {
+    if (state.track !== track || document.hidden) return;
+    showHint(null);
+    if (state.autoScan && !isSheetOpen()) state.scanner?.start();
   });
 }
 
 function cameraIsLive() {
-  return Boolean(state.track && state.track.readyState === "live" && !state.track.muted);
+  return Boolean(state.track && state.track.readyState === "live");
+}
+
+// 브라우저가 백그라운드에서 트랙을 mute했다가 포그라운드에서 unmute하기까지 잠깐 걸린다. 그 사이 기다린다.
+function waitForUnmute(track, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!track || !track.muted) return resolve(true);
+    let timer = 0;
+    const done = (ok) => {
+      clearTimeout(timer);
+      track.removeEventListener("unmute", onUnmute);
+      resolve(ok);
+    };
+    const onUnmute = () => done(true);
+    track.addEventListener("unmute", onUnmute);
+    timer = setTimeout(() => done(!track.muted), timeoutMs);
+  });
 }
 
 // 화면으로 돌아왔거나 트랙이 끊겼을 때: 살아 있는 트랙이 없으면 카메라를 다시 연 뒤 스캐너를 재개한다.
@@ -248,6 +276,15 @@ async function ensureCameraLive() {
   if (resuming) return resuming;
   resuming = (async () => {
     state.scanner?.stop();
+    if (cameraIsLive() && state.track.muted) {
+      // 아직 unmute 전이면 잠시 기다린다. 끝내 풀리지 않으면 다시 연다.
+      const ok = await waitForUnmute(state.track, 3000);
+      if (!ok && state.stream) {
+        stopCamera(state.stream);
+        state.stream = null;
+        state.track = null;
+      }
+    }
     if (!cameraIsLive()) {
       if (state.stream) stopCamera(state.stream);
       state.stream = null;
@@ -257,7 +294,7 @@ async function ensureCameraLive() {
         await openCamera();
       } catch {
         setState("error");
-        showHint("카메라를 다시 열 수 없습니다. 페이지를 새로 고쳐 주세요.", "error");
+        showHint("카메라를 다시 열 수 없습니다. 잠시 후 '지금 인식' 버튼을 눌러 다시 시도해 주세요.", "error");
         setStatus("");
         return;
       }
@@ -282,9 +319,10 @@ async function boot() {
   } catch (err) {
     setState("error");
     const messages = {
-      denied: "카메라 사용 권한이 필요합니다. 브라우저 설정에서 카메라를 허용해 주세요.",
+      denied: "카메라 사용 권한이 필요합니다. 브라우저나 기기 설정에서 카메라를 허용한 뒤 '지금 인식' 버튼을 눌러 주세요.",
       not_found: "사용할 수 있는 카메라를 찾지 못했습니다.",
       insecure: "카메라는 HTTPS 주소에서만 사용할 수 있습니다.",
+      no_frames: "카메라 화면을 받지 못했습니다. 다른 앱이 카메라를 사용 중이면 닫고 '지금 인식' 버튼을 눌러 주세요.",
     };
     showHint(messages[err?.code] || "카메라를 열 수 없습니다.", "error");
     setStatus("");
@@ -294,11 +332,18 @@ async function boot() {
   setState("ready");
   setStatus("자동 인식 중");
   state.scanner = buildScanner();
-  if (state.autoScan) state.scanner.start();
+  if (state.autoScan && !document.hidden) state.scanner.start();
 }
 
 btnScan.addEventListener("click", () => {
-  if (!isSheetOpen()) state.scanner?.scanNow();
+  if (isSheetOpen()) return;
+  // 권한 거부 등으로 카메라를 못 열었으면 이 버튼이 재시도 경로다 (설치형 PWA에는 새로 고침이 없다).
+  if (!state.stream) {
+    if (state.scanner) ensureCameraLive();
+    else boot();
+    return;
+  }
+  state.scanner?.scanNow();
 });
 btnTorch.addEventListener("click", toggleTorch);
 btnAuto.addEventListener("click", toggleAuto);
@@ -325,6 +370,8 @@ document.addEventListener("visibilitychange", () => {
     state.scanner?.stop();
   } else if (state.scanner) {
     ensureCameraLive();
+  } else if (!state.stream && app.dataset.state === "error") {
+    boot(); // 설정에서 권한을 허용하고 돌아온 경우: 조용히 다시 시도한다
   }
 });
 

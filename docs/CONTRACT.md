@@ -65,6 +65,7 @@
 - `plants[].id`: 응답 내 고유 문자열 (`p1`, `p2`, ...).
 - `plants`는 `confidence` 내림차순, 최대 6개.
 - `usage`는 제공자가 주지 않으면 0으로 채웁니다.
+- 서버는 base64 앞부분의 매직 바이트가 선언한 형식과 맞는지 확인하고, `width`/`height`는 1..8192 정수여야 합니다. 모델이 픽셀 단위 bbox(1.5 초과 값)를 주면 이미지 크기로 나눠 정규화합니다.
 - `plants[].detail_ko`: 1단계에서는 비어 있을 수 있습니다(`""`). Claude 제공자는 1단계 스키마에 detail_ko를 넣지 않으며 서버가 `""`로 채웁니다. mock 제공자는 상세를 미리 채워 줍니다. 클라이언트는 비어 있을 때만 `POST /api/describe`를 부릅니다.
 - `plants[].summary_ko`: 한 문장.
 
@@ -82,7 +83,7 @@
 }
 ```
 
-- `plant.name_ko`는 필수, 나머지는 있으면 사용합니다. 검증 규칙(이미지, width, height)은 identify와 같습니다.
+- `plant.name_ko`는 필수, 나머지는 있으면 사용합니다. 검증 규칙(이미지, width, height)은 identify와 같습니다. 이름 필드는 120자 이내이며, 제공자는 제어 문자와 꺾쇠를 제거하고 `<plant_name>` 태그로 감싸 데이터로만 다루게 합니다. describe의 `max_tokens`는 2048.
 
 응답 200:
 
@@ -134,7 +135,7 @@
 ```js
 export async function startCamera(videoEl, { facingMode = "environment" } = {})
 // -> { stream, track, torchSupported: boolean }
-// 실패 시 Error를 throw. error.code: "denied" | "not_found" | "insecure" | "unknown"
+// 실패 시 Error를 throw. error.code: "denied" | "not_found" | "insecure" | "no_frames"(스트림은 받았지만 5초 안에 프레임이 없음) | "unknown"
 
 export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, viewH, encode = true } = {})
 // encode: false이면 JPEG 인코딩을 생략하고 dataUrl과 base64가 null이다 (스캐너의 250ms 샘플링용).
@@ -149,7 +150,7 @@ export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, v
 // videoEl.videoWidth가 0이면 null 반환.
 
 export async function setTorch(track, on)
-// -> boolean (실제 적용 여부). 미지원이면 false, throw하지 않음.
+// -> boolean (실제 적용 여부: applyConstraints 뒤 getSettings().torch로 확인). 미지원이면 false, throw하지 않음.
 
 export function stopCamera(stream)
 ```
@@ -283,7 +284,8 @@ export async function describe({ base64, width, height, plant, lang = "ko", sign
 - identify 호출을 감싸 결과에 `result.frame = { base64, width, height, crop }`를 붙인다 (describe와 overlay가 쓴다).
 - 툴팁 선택: openSheet(plant). plant.detail_ko가 비어 있으면 api.describe({ ...state.lastResult.frame, plant })를 부르고,
   성공하면 plant.detail_ko에 캐시한 뒤 setSheetDetail, 실패하면 setSheetDetail에 error와 onRetry를 넘긴다.
-- 시트가 열려 있는 동안 스캐너를 멈추고(사용자가 읽는 동안 씬이 바뀌어도 요청하지 않음), 닫히면 autoScan이면 다시 시작한다.
+- 시트가 열려 있는 동안 스캐너를 멈추고(사용자가 읽는 동안 씬이 바뀌어도 요청하지 않음), 닫히면 autoScan이면 다시 시작한다. 시트가 열린 동안 `#viewport`와 `#toolbar`는 `inert`.
+- 카메라 생존: 트랙 `ended` / `pageshow` / 화면 복귀 시 트랙이 live가 아니면 다시 열고 `scanner.reset()`; `mute`면 스캐너만 멈추고 `unmute`에 재개(복귀 시 최대 3초 unmute 대기 후 재오픈). 카메라를 못 연 상태에서는 "지금 인식" 버튼이 재시도 경로다.
 - 리사이즈/회전 시 마지막 결과로 overlay를 다시 그림.
 - 오류 시 `#hint`에 한국어 안내.
 

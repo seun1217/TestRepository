@@ -60,6 +60,8 @@ export function renderOverlay(container, plants, { videoEl, crop = null, onSelec
   const elemH = container.clientHeight;
   const videoW = videoEl?.videoWidth || crop?.videoW || elemW;
   const videoH = videoEl?.videoHeight || crop?.videoH || elemH;
+  // 회전 등으로 스트림 크기가 캡처 때와 달라졌으면 옛 좌표는 맞지 않으므로 그리지 않는다 (스캐너가 곧 다시 인식한다).
+  if (crop && crop.videoW > 0 && crop.videoH > 0 && (crop.videoW !== videoW || crop.videoH !== videoH)) return;
   const geometry = computeCoverGeometry({ videoW, videoH, elemW, elemH });
 
   const entries = plants.map((plant) => ({
