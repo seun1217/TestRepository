@@ -32,6 +32,7 @@ const RATE_WINDOW_MS = 60_000;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const MIN_CONFIDENCE = 0.35;
+const MAX_PLANT_TEXT = 120; // describe 요청의 name_ko, name_sci, id 최대 길이
 const MAX_PLANTS = 6;
 
 const QUALITY_MESSAGES = {
@@ -191,10 +192,13 @@ function parsePlant(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "설명할 식물 정보가 필요합니다." };
   const name_ko = typeof raw.name_ko === "string" ? raw.name_ko.trim() : "";
   if (!name_ko) return { error: "식물 이름이 필요합니다." };
+  if (name_ko.length > MAX_PLANT_TEXT) return { error: "식물 이름이 너무 깁니다." };
   const plant = { name_ko };
   for (const key of ["id", "name_sci"]) {
     if (raw[key] == null) continue;
     if (typeof raw[key] !== "string") return { error: "식물 정보 형식이 올바르지 않습니다." };
+    // 클라이언트가 보내는 텍스트는 그대로 프롬프트에 들어가므로 길이를 제한한다 (입력 토큰 부풀리기 방지).
+    if (raw[key].length > MAX_PLANT_TEXT) return { error: "식물 정보가 너무 깁니다." };
     plant[key] = raw[key].trim();
   }
   if (raw.bbox != null) {

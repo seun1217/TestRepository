@@ -218,6 +218,16 @@ describe("server: POST /api/describe", () => {
     assert.match(json.error.message_ko, /니다\.$/);
   });
 
+  test("name_ko or name_sci longer than 120 chars -> 400 bad_request", async () => {
+    const long = "가".repeat(121);
+    for (const plant of [{ name_ko: long }, { ...camellia, name_sci: "x".repeat(121) }]) {
+      const { res, json } = await postDescribe(base, { ...goodBody, plant });
+      assert.equal(res.status, 400);
+      assert.equal(json.error.code, "bad_request");
+      assert.match(json.error.message_ko, /너무 깁니다/);
+    }
+  });
+
   test("empty name_ko -> 400 bad_request", async () => {
     for (const name_ko of ["", "   ", null, 42]) {
       const { res, json } = await postDescribe(base, { ...goodBody, plant: { ...camellia, name_ko } });

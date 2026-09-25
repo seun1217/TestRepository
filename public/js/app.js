@@ -194,15 +194,64 @@ function buildScanner() {
   });
 }
 
+// 카메라를 열고 상태에 기록한다. 트랙이 끊기면(잠금 화면, 앱 전환, iOS의 백그라운드 처리) 복구 경로로 이어진다.
+async function openCamera() {
+  const cam = await startCamera(videoEl, { facingMode: "environment" });
+  state.stream = cam.stream;
+  state.track = cam.track;
+  state.torchSupported = Boolean(cam.torchSupported);
+  state.torchOn = false;
+  btnTorch.hidden = !state.torchSupported;
+  btnTorch.setAttribute("aria-pressed", "false");
+  state.track?.addEventListener?.("ended", () => {
+    if (!document.hidden) ensureCameraLive();
+  });
+}
+
+function cameraIsLive() {
+  return Boolean(state.track && state.track.readyState === "live" && !state.track.muted);
+}
+
+// 화면으로 돌아왔거나 트랙이 끊겼을 때: 살아 있는 트랙이 없으면 카메라를 다시 연 뒤 스캐너를 재개한다.
+// 끊긴 트랙 위에서는 마지막 프레임이 그대로 멈춰 "안정"으로 보이므로, 그 화면을 인식해 과금하는 일을 막는다.
+let resuming = null;
+async function ensureCameraLive() {
+  if (resuming) return resuming;
+  resuming = (async () => {
+    state.scanner?.stop();
+    if (!cameraIsLive()) {
+      if (state.stream) stopCamera(state.stream);
+      state.stream = null;
+      state.track = null;
+      setStatus("카메라를 다시 여는 중");
+      try {
+        await openCamera();
+      } catch {
+        setState("error");
+        showHint("카메라를 다시 열 수 없습니다. 페이지를 새로 고쳐 주세요.", "error");
+        setStatus("");
+        return;
+      }
+      state.scanner?.reset(); // 이전 결과는 새 스트림과 무관하다
+      paintResult(null);
+      showHint(null);
+      setState("ready");
+    }
+    if (state.autoScan && !isSheetOpen() && !document.hidden) {
+      state.scanner?.start();
+      setStatus("자동 인식 중");
+    }
+  })().finally(() => {
+    resuming = null;
+  });
+  return resuming;
+}
+
 async function boot() {
   setState("starting");
   setStatus("카메라를 여는 중");
   try {
-    const cam = await startCamera(videoEl, { facingMode: "environment" });
-    state.stream = cam.stream;
-    state.track = cam.track;
-    state.torchSupported = Boolean(cam.torchSupported);
-    btnTorch.hidden = !state.torchSupported;
+    await openCamera();
   } catch (err) {
     setState("error");
     const messages = {
@@ -245,14 +294,19 @@ videoEl.addEventListener("loadedmetadata", onLayoutChange);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     state.scanner?.stop();
-  } else if (state.autoScan && !isSheetOpen()) {
-    state.scanner?.start();
+  } else if (state.scanner) {
+    ensureCameraLive();
   }
 });
 
 window.addEventListener("pagehide", () => {
   state.scanner?.stop();
   if (state.stream) stopCamera(state.stream);
+});
+
+// bfcache에서 돌아오면 pagehide로 멈춘 스트림을 다시 연다.
+window.addEventListener("pageshow", () => {
+  if (state.scanner && !document.hidden) ensureCameraLive();
 });
 
 if ("serviceWorker" in navigator && location.protocol === "https:") {

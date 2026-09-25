@@ -211,5 +211,19 @@ export function createScanner({
     return running;
   }
 
-  return { start, stop, scanNow, isRunning };
+  // 카메라를 다시 열었을 때처럼 이전 결과가 더 이상 화면과 무관해졌을 때 부른다. 루프 상태는 바꾸지 않는다.
+  function reset() {
+    prevSample = null;
+    hasResult = false;
+    resultSample = null;
+    serverHint = false;
+    lastServerMsg = null;
+    retryAt = -Infinity;
+    retryStreak = 0;
+    backoffUntil = -Infinity;
+    errorStreak = 0;
+    blurrySince = -Infinity;
+  }
+
+  return { start, stop, scanNow, isRunning, reset };
 }

@@ -59,6 +59,8 @@ npm run test:e2e    # Playwright, 가짜 카메라 스트림과 mock 제공자�
 npm test            # 둘 다
 ```
 
+새로 받은 환경에 Chromium이 없으면 E2E 전에 `npx playwright install chromium`을 한 번 실행합니다 (`playwright.config.js`는 `/opt/pw-browsers/chromium`이 있으면 그것을, 없으면 Playwright가 설치한 브라우저를 씁니다).
+
 E2E 테스트는 캔버스 기반의 가짜 카메라(밝은 장면, 어두운 장면, 밋밋한 장면)를 주입해 안내 문구와 툴팁 배치를 검증합니다. 실제 기기 카메라, 플래시, 모델 정확도는 자동 테스트 범위 밖이므로 휴대폰에서 직접 확인해야 합니다.
 
 ## 알아둘 점

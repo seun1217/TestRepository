@@ -51,25 +51,36 @@ function fakeCameraInit(variant) {
   }
 
   draw();
-  const stream = canvas.captureStream(15);
-  const track = stream.getVideoTracks()[0];
-  // 플래시 미지원 장치처럼 보이게 한다.
-  track.getCapabilities = () => ({});
-  track.applyConstraints = () =>
-    Promise.reject(new DOMException("torch is not supported", "NotSupportedError"));
+  // getUserMedia를 부를 때마다 새 스트림을 만든다 (실제 카메라처럼, 끊긴 트랙 뒤에 다시 열 수 있어야 한다).
+  const tracks = [];
+  function makeStream() {
+    const stream = canvas.captureStream(15);
+    const track = stream.getVideoTracks()[0];
+    // 플래시 미지원 장치처럼 보이게 한다.
+    track.getCapabilities = () => ({});
+    track.applyConstraints = () =>
+      Promise.reject(new DOMException("torch is not supported", "NotSupportedError"));
+    tracks.push(track);
+    window.__fakeCamera.stream = stream;
+    window.__fakeCamera.track = track;
+    window.__fakeCamera.opens += 1;
+    return stream;
+  }
 
   setInterval(() => {
     draw();
-    try {
-      if (typeof track.requestFrame === "function") track.requestFrame();
-    } catch {
-      // 트랙이 이미 멈췄으면 무시한다.
+    for (const track of tracks) {
+      try {
+        if (track.readyState === "live" && typeof track.requestFrame === "function") track.requestFrame();
+      } catch {
+        // 트랙이 이미 멈췄으면 무시한다.
+      }
     }
   }, 100);
 
+  window.__fakeCamera = { variant, canvas, stream: null, track: null, opens: 0 };
   const media = navigator.mediaDevices;
-  media.getUserMedia = async () => stream;
-  window.__fakeCamera = { variant, canvas, stream, track };
+  media.getUserMedia = async () => makeStream();
 }
 
 // variant: "bright" | "dark" | "flat". page.goto 전에 호출해야 한다.

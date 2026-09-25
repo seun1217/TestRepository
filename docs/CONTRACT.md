@@ -194,7 +194,8 @@ export function createScanner({
   stableDiff = 0.06,     // 이전 샘플과의 diff가 이 값 이하이면 "안정"
   sceneChangeDiff = 0.18 // 마지막 결과 시점 샘플 대비 diff가 이 값 이상이면 결과를 무효화하고 재스캔
 })
-// -> { start(), stop(), scanNow(), isRunning() }
+// -> { start(), stop(), scanNow(), isRunning(), reset() }
+// reset(): 결과, 샘플, 서버 안내, 대기/백오프를 모두 버린다 (카메라를 다시 열었을 때 app.js가 부른다). 루프 상태는 유지.
 // 규칙:
 // - 약 250ms 간격으로 샘플링. verdict가 ok가 아니면 onHint(hintFor(verdict))를 호출하고 요청하지 않는다.
 // - 안정(stableDiff 이하)이고 마지막 요청으로부터 minIntervalMs 이상 지났을 때만 identify 호출.

@@ -464,3 +464,16 @@ test("capture가 throw해도 루프는 계속 돌며 onError로 알린다", asyn
   assert.equal(scanner.isRunning(), true);
   assert.equal(clock.pending(), 1);
 });
+
+test("reset()은 살아 있는 결과를 버려 같은 씬이라도 다시 요청하게 한다", async () => {
+  const { clock, calls, scanner } = setup();
+  scanner.start();
+  await clock.advance(500);
+  assert.equal(calls.identify.length, 1);
+  await clock.advance(3000);
+  assert.equal(calls.identify.length, 1); // 결과가 살아 있으므로 재요청 없음
+  scanner.reset();
+  await clock.advance(500); // 안정 판정에 두 샘플 필요
+  assert.equal(calls.identify.length, 2);
+  assert.equal(scanner.isRunning(), true);
+});
