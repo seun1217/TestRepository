@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>원무 圓舞 · 한가위 2026</title>
+<link rel="stylesheet" href="fonts.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #1a1c20; }
+  body { display: grid; place-items: center; }
+  canvas { display: block; width: auto; height: auto; max-width: 100vw; max-height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="art"></canvas>
+<script>
+'use strict';
+// 원무 圓舞 (Circle Dance), Hangawi 2026.
+// A full moon of hanji, ringed by hand-painted dots: a halo, a ring of 오색 songpyeon
+// (half moons dancing around the full moon, like 강강술래), and a blue universe of dots
+// after Kim Whanki's dot paintings, dissolving into the night.
+//
+// Query params:
+//   mode=poster|art  poster: 4:5 print on hanji with caption; art: square, full bleed
+//   size=<px>        output width (default 2400)
+//   seed=<int>       composition seed (default 925)
+
+const qs = new URLSearchParams(location.search);
+const MODE = qs.get('mode') === 'art' ? 'art' : 'poster';
+const SIZE = +qs.get('size') || 2400;
+const SEED = +(qs.get('seed') || 925);
+
+const canvas = document.getElementById('art');
+let ctx = canvas.getContext('2d');
+let u = 1; // 1 unit = 1px at 2400px wide
+
+// ---------- random & math ----------
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+let rand = mulberry32(SEED);
+const rr = (a = 0, b = 1) => a + (b - a) * rand();
+const pick = (arr) => arr[Math.floor(rand() * arr.length)];
+function gauss() {
+  let a = 0, b = 0;
+  while (!a) a = rand();
+  while (!b) b = rand();
+  return Math.sqrt(-2 * Math.log(a)) * Math.cos(2 * Math.PI * b);
+}
+const TAU = Math.PI * 2;
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+const lerp = (a, b, t) => a + (b - a) * t;
+const mix = (c1, c2, t) => c1.map((v, i) => lerp(v, c2[i], t));
+const rgba = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+const scale = (c, k) => c.map((v) => clamp(v * k, 0, 255));
+function vary(c, amt) {
+  const k = gauss() * amt;
+  return c.map((v) => clamp(v + k + gauss() * amt * 0.4, 0, 255));
+}
+
+// ---------- palette ----------
+const MOONLIGHT = [240, 230, 204];
+const GOLD = [214, 180, 112];
+const BLUES = [
+  [48, 88, 166],   // ultramarine
+  [38, 70, 138],   // deep ultramarine
+  [64, 106, 182],  // cobalt
+  [34, 62, 110],   // prussian
+  [78, 118, 176],  // cerulean grey
+  [54, 72, 146],   // indigo violet
+];
+const SONGPYEON = [
+  [240, 233, 218], // 흰 (rice)
+  [226, 158, 156], // 분홍 (omija)
+  [228, 190, 104], // 노랑 (gardenia)
+  [134, 158, 108], // 초록 (mugwort)
+  [154, 124, 168], // 보라 (purple sweet potato)
+];
+const INK = [26, 30, 42];
+const PAPER = [238, 232, 218];
+const SEAL = [180, 48, 36];
+
+// ---------- primitives ----------
+function lobes(irr, fine = 0) {
+  const L = [
+    [2, irr * rr(0.4, 1), rr(0, TAU)],
+    [3, irr * rr(0.3, 0.8), rr(0, TAU)],
+    [5, irr * rr(0.1, 0.4), rr(0, TAU)],
+    [7, irr * rr(0, 0.25), rr(0, TAU)],
+  ];
+  if (fine) L.push([11, fine * rr(0.5, 1), rr(0, TAU)], [17, fine * rr(0.3, 0.7), rr(0, TAU)], [29, fine * rr(0.2, 0.5), rr(0, TAU)]);
+  return L;
+}
+function blob(x, y, rx, L, ry = rx) {
+  const n = Math.max(20, Math.min(160, Math.round(Math.max(rx, ry) * 1.4)));
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const t = (i / n) * TAU;
+    let k = 1;
+    for (const [f, a, p] of L) k += a * Math.sin(f * t + p);
+    const px = x + Math.cos(t) * rx * k;
+    const py = y + Math.sin(t) * ry * k;
+    if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  }
+  ctx.closePath();
+}
+function softSpot(x, y, r, c, a) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, rgba(c, a));
+  g.addColorStop(0.55, rgba(c, a * 0.55));
+  g.addColorStop(1, rgba(c, 0));
+  ctx.fillStyle = g;
+  ctx.fillRect(x - r, y - r, 2 * r, 2 * r);
+}
+function fibers(n, box, colors, alpha, len, width) {
+  for (let i = 0; i < n; i++) {
+    const x = rr(box[0], box[2]);
+    const y = rr(box[1], box[3]);
+    const l = rr(len[0], len[1]) * u;
+    const a = rr(0, TAU);
+    const bend = rr(-0.45, 0.45) * l;
+    const x2 = x + Math.cos(a) * l;
+    const y2 = y + Math.sin(a) * l;
+    const mx = (x + x2) / 2 + Math.cos(a + Math.PI / 2) * bend;
+    const my = (y + y2) / 2 + Math.sin(a + Math.PI / 2) * bend;
+    ctx.strokeStyle = rgba(pick(colors), rr(alpha[0], alpha[1]));
+    ctx.lineWidth = rr(width[0], width[1]) * u;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(mx, my, x2, y2);
+    ctx.stroke();
+  }
+}
+function grain(w, h, amount) {
+  const img = ctx.getImageData(0, 0, w, h);
+  const p = img.data;
+  for (let i = 0; i < p.length; i += 4) {
+    const n = (rand() - 0.5) * amount;
+    p[i] += n; p[i + 1] += n; p[i + 2] += n;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// A hand-painted dot: capillary bleed, body, pigment pooling, drying ring.
+function dot(x, y, r, c, a) {
+  const L = lobes(0.07);
+  const dark = scale(c, 0.8);
+  ctx.fillStyle = rgba(c, 0.045 * a); blob(x, y, r * 1.95, lobes(0.12)); ctx.fill();
+  ctx.fillStyle = rgba(c, 0.085 * a); blob(x, y, r * 1.35, lobes(0.1)); ctx.fill();
+  ctx.fillStyle = rgba(c, 0.35 * a); blob(x, y, r * 1.06, L); ctx.fill();
+  ctx.fillStyle = rgba(c, 0.84 * a); blob(x, y, r, L); ctx.fill();
+  ctx.fillStyle = rgba(dark, 0.22 * a);
+  blob(x + rr(-0.25, 0.25) * r, y + rr(-0.25, 0.25) * r, r * rr(0.35, 0.65), lobes(0.15)); ctx.fill();
+  ctx.fillStyle = rgba(mix(c, [255, 255, 255], 0.2), 0.13 * a);
+  blob(x + rr(-0.3, 0.3) * r, y + rr(-0.3, 0.3) * r, r * rr(0.3, 0.55), lobes(0.15)); ctx.fill();
+  ctx.strokeStyle = rgba(dark, 0.28 * a);
+  ctx.lineWidth = 1.1 * u;
+  blob(x, y, r * 0.97, L); ctx.stroke();
+}
+
+// Songpyeon: a plump half moon, dome outward, pinched seam along the ring.
+function songpyeon(x, y, w, h, rot, c) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  const shape = (s) => {
+    ctx.beginPath();
+    ctx.moveTo(-w / 2 * s, 0);
+    ctx.bezierCurveTo(-w / 2 * s, -h * 1.3 * s, w / 2 * s, -h * 1.3 * s, w / 2 * s, 0);
+    ctx.quadraticCurveTo(0, h * 0.22 * s, -w / 2 * s, 0);
+    ctx.closePath();
+  };
+  ctx.translate(0, h * 0.35);
+  ctx.fillStyle = rgba(c, 0.07); shape(1.35); ctx.fill();
+  ctx.fillStyle = rgba(c, 0.94); shape(1); ctx.fill();
+  const g = ctx.createLinearGradient(0, -h, 0, h * 0.2);
+  g.addColorStop(0, rgba([255, 255, 255], 0.2));
+  g.addColorStop(0.55, rgba([255, 255, 255], 0));
+  g.addColorStop(1, rgba(scale(c, 0.68), 0.4));
+  ctx.fillStyle = g; shape(1); ctx.fill();
+  // seam with finger pinches
+  ctx.strokeStyle = rgba(scale(c, 0.7), 0.5);
+  ctx.lineWidth = 1.2 * u;
+  ctx.beginPath();
+  ctx.moveTo(-w * 0.44, h * 0.02);
+  ctx.quadraticCurveTo(0, h * 0.2, w * 0.44, h * 0.02);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- the artwork (square, S×S) ----------
+function paintGround(S) {
+  const g = ctx.createLinearGradient(0, 0, 0, S);
+  g.addColorStop(0, '#0b1222');
+  g.addColorStop(0.5, '#0e182c');
+  g.addColorStop(1, '#0a101e');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  const tones = [[20, 34, 66], [8, 13, 26], [24, 40, 78], [14, 22, 44]];
+  for (let i = 0; i < 150; i++) {
+    softSpot(rr(-0.1, 1.1) * S, rr(-0.1, 1.1) * S, rr(0.06, 0.3) * S, pick(tones), rr(0.04, 0.11));
+  }
+  fibers(7000, [0, 0, S, S], [[120, 140, 180], [90, 110, 150], [150, 160, 184]], [0.02, 0.06], [10, 90], [0.5, 1.3]);
+}
+
+const MARIA = [
+  // x, y, rx, ry (in moon radii), strength
+  [-0.62, -0.36, 0.22, 0.24, 0.9],  // Oceanus Procellarum (north)
+  [-0.76, -0.04, 0.16, 0.27, 0.9],  // Oceanus Procellarum (west)
+  [-0.60, 0.22, 0.14, 0.14, 0.7],   // Oceanus Procellarum (south)
+  [-0.24, -0.52, 0.30, 0.25, 1.0],  // Mare Imbrium
+  [0.25, -0.46, 0.17, 0.15, 1.0],   // Mare Serenitatis
+  [0.50, -0.14, 0.19, 0.22, 1.0],   // Mare Tranquillitatis
+  [0.80, -0.30, 0.09, 0.13, 1.0],   // Mare Crisium
+  [0.73, 0.12, 0.12, 0.19, 0.85],   // Mare Fecunditatis
+  [0.55, 0.27, 0.08, 0.09, 0.8],    // Mare Nectaris
+  [-0.26, 0.36, 0.19, 0.15, 0.8],   // Mare Nubium
+  [-0.56, 0.41, 0.09, 0.10, 0.9],   // Mare Humorum
+  [0.06, -0.23, 0.07, 0.07, 0.8],   // Mare Vaporum
+  [-0.48, -0.12, 0.14, 0.13, 0.7],  // Mare Insularum
+  [-0.38, 0.17, 0.10, 0.10, 0.6],   // Mare Cognitum
+];
+
+function paintMoon(cx, cy, Rm) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'screen';
+  const glow = ctx.createRadialGradient(cx, cy, Rm, cx, cy, Rm * 2.2);
+  glow.addColorStop(0, 'rgba(226,208,164,0.24)');
+  glow.addColorStop(0.35, 'rgba(180,168,140,0.08)');
+  glow.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(cx - Rm * 2.2, cy - Rm * 2.2, Rm * 4.4, Rm * 4.4);
+  ctx.restore();
+
+  // hand-torn outline
+  const ph = Array.from({ length: 6 }, () => rr(0, TAU));
+  const edge = (t) => Rm * (1 + 0.0035 * Math.sin(3 * t + ph[0]) + 0.0025 * Math.sin(7 * t + ph[1]) +
+    0.0018 * Math.sin(17 * t + ph[2]) + 0.0012 * Math.sin(41 * t + ph[3]) + 0.0008 * Math.sin(97 * t + ph[4]) +
+    0.0005 * Math.sin(211 * t + ph[5]));
+  ctx.save();
+  ctx.beginPath();
+  for (let i = 0; i < 1440; i++) {
+    const t = (i / 1440) * TAU;
+    const e = edge(t);
+    if (i) ctx.lineTo(cx + Math.cos(t) * e, cy + Math.sin(t) * e); else ctx.moveTo(cx + Math.cos(t) * e, cy + Math.sin(t) * e);
+  }
+  ctx.closePath();
+  ctx.clip();
+  const base = ctx.createRadialGradient(cx - Rm * 0.18, cy - Rm * 0.22, 0, cx, cy, Rm * 1.02);
+  base.addColorStop(0, '#f8f2e3');
+  base.addColorStop(0.72, '#efe5cc');
+  base.addColorStop(1, '#e5d5b2');
+  ctx.fillStyle = base;
+  ctx.fillRect(cx - Rm * 1.1, cy - Rm * 1.1, Rm * 2.2, Rm * 2.2);
+  for (let i = 0; i < 60; i++) {
+    const t = rr(0, TAU), d = Math.sqrt(rand()) * Rm;
+    softSpot(cx + Math.cos(t) * d, cy + Math.sin(t) * d, rr(0.1, 0.45) * Rm,
+      pick([[255, 250, 238], [224, 208, 176], [234, 224, 202]]), rr(0.03, 0.07));
+  }
+  // maria as one soft watercolour wash: the rabbit pounding rice cakes, as seen from Korea
+  const seas = (core) => {
+    const size = Math.ceil(Rm * 2.2);
+    const m = document.createElement('canvas');
+    m.width = m.height = size;
+    const prev = ctx;
+    ctx = m.getContext('2d');
+    ctx.fillStyle = rgba([118, 128, 150]);
+    for (const [mx, my, rx, ry, s] of MARIA) {
+      const k = core ? 0.55 * s : 1;
+      for (let i = 0; i < 3; i++) {
+        blob(size / 2 + (mx + rr(-0.2, 0.2) * rx) * Rm, size / 2 + (my + rr(-0.2, 0.2) * ry) * Rm,
+          rx * k * rr(0.75, 1) * Rm, lobes(0.12, 0.02), ry * k * rr(0.75, 1) * Rm);
+        ctx.fill();
+      }
+    }
+    ctx = prev;
+    return m;
+  };
+  const mare = seas(false), mareCore = seas(true);
+  const mo = [cx - mare.width / 2, cy - mare.height / 2];
+  ctx.save();
+  ctx.filter = `blur(${12 * u}px)`; ctx.globalAlpha = 0.1; ctx.drawImage(mare, ...mo);
+  ctx.filter = `blur(${2.5 * u}px)`; ctx.globalAlpha = 0.18; ctx.drawImage(mare, ...mo);
+  ctx.filter = `blur(${8 * u}px)`; ctx.globalAlpha = 0.1; ctx.drawImage(mareCore, ...mo);
+  ctx.restore();
+  for (const [x, y, r] of [[-0.14, 0.69, 0.05], [-0.34, -0.17, 0.035], [-0.6, -0.12, 0.025]]) {
+    softSpot(cx + x * Rm, cy + y * Rm, r * Rm * 2.2, [255, 252, 244], 0.3);
+  }
+  fibers(2200, [cx - Rm, cy - Rm, cx + Rm, cy + Rm], [[196, 180, 148], [210, 196, 166]], [0.05, 0.12], [8, 60], [0.4, 1.1]);
+  fibers(1100, [cx - Rm, cy - Rm, cx + Rm, cy + Rm], [[255, 252, 244]], [0.12, 0.3], [8, 50], [0.4, 1.2]);
+  const limb = ctx.createRadialGradient(cx, cy, Rm * 0.82, cx, cy, Rm * 1.01);
+  limb.addColorStop(0, 'rgba(210,184,132,0)');
+  limb.addColorStop(1, 'rgba(206,176,120,0.2)');
+  ctx.fillStyle = limb;
+  ctx.fillRect(cx - Rm * 1.1, cy - Rm * 1.1, Rm * 2.2, Rm * 2.2);
+  ctx.restore();
+
+  // a few fibres escaping the torn edge
+  for (let i = 0; i < 1400; i++) {
+    const t = rr(0, TAU);
+    const e = edge(t) - rr(0, 4) * u;
+    const a = t + rr(-0.9, 0.9);
+    const l = rr(2, 8) * u;
+    const x = cx + Math.cos(t) * e, y = cy + Math.sin(t) * e;
+    ctx.strokeStyle = rgba(pick([[240, 230, 206], [226, 212, 180]]), rr(0.08, 0.3));
+    ctx.lineWidth = rr(0.35, 0.9) * u;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l);
+    ctx.stroke();
+  }
+}
+
+function paintRings(cx, cy, Rm, S) {
+  const s = 36 * u;          // ring pitch
+  const dotR = 10.5 * u;
+  const rFade = Rm * 2.75;   // where the dance dissolves into the night
+  const rings = [
+    { kind: 'halo', r: Rm + 46 * u, c: MOONLIGHT, size: 0.46, a: 0.6, pitch: 24 * u },
+    { kind: 'halo', r: Rm + 80 * u, c: GOLD, size: 0.7, a: 0.8, pitch: 33 * u },
+    { kind: 'songpyeon', r: Rm + 134 * u },
+  ];
+  const wave = rr(0, TAU);
+  let r = Rm + 190 * u;
+  for (let k = 0; r < S * 0.75; k++, r += s) rings.push({ kind: 'blue', r, k });
+
+  for (const ring of rings) {
+    if (ring.kind === 'songpyeon') {
+      const w = 42 * u, h = 24 * u;
+      const n = Math.round((TAU * ring.r) / (w * 1.4) / 5) * 5;
+      const phase = rr(0, TAU);
+      for (let i = 0; i < n; i++) {
+        const t = phase + (i / n) * TAU;
+        songpyeon(cx + Math.cos(t) * ring.r, cy + Math.sin(t) * ring.r, w * rr(0.95, 1.05), h * rr(0.95, 1.05),
+          t + Math.PI / 2 + 0.42 + rr(-0.05, 0.05), vary(SONGPYEON[i % 5], 4));
+      }
+      continue;
+    }
+    const pitch = ring.pitch || s;
+    const n = Math.round((TAU * ring.r) / (pitch * rr(0.98, 1.03)));
+    const phase = rr(0, TAU);
+    // rows placed by hand are never quite circles
+    const wob = [rr(1, 3.5) * u, rr(0, TAU), rr(0.5, 2) * u, rr(0, TAU)];
+    const d = clamp((ring.r - Rm) / (rFade - Rm), 0, 2);
+    // each ring of dancers wears its own shade; the shades swell like ripples
+    let base = ring.c;
+    if (ring.kind === 'blue') {
+      base = mix(pick(BLUES), [136, 156, 196], 0.26 * (1 - smooth(0, 0.55, d)));
+      base = scale(base, 1 + 0.1 * Math.sin(ring.k * 0.85 + wave));
+    }
+    for (let i = 0; i < n; i++) {
+      const t = phase + ((i + rr(-0.12, 0.12)) / n) * TAU;
+      const rad = ring.r + wob[0] * Math.sin(2 * t + wob[1]) + wob[2] * Math.sin(5 * t + wob[3]) + gauss() * 1.3 * u;
+      const x = cx + Math.cos(t) * rad, y = cy + Math.sin(t) * rad;
+      const out = x < -40 * u || x > S + 40 * u || y < -40 * u || y > S + 40 * u;
+      if (ring.kind === 'halo') {
+        const c = vary(ring.c, 6), k = rr(0.85, 1.15);
+        if (!out) dot(x, y, dotR * ring.size * k, c, ring.a);
+        continue;
+      }
+      const keep = 1 - 0.97 * smooth(0.45, 1.1, d);
+      const roll = rand(), star = rand(), k = rr(0.85, 1.15);
+      let c = vary(base, 9);
+      if (out || roll > keep) continue;
+      if (d > 0.75 && star < 0.05) c = vary(GOLD, 8);
+      dot(x, y, dotR * (1 - 0.3 * smooth(0.3, 1.2, d)) * k, c, 1 - 0.7 * smooth(0.55, 1.15, d));
+    }
+  }
+}
+
+function paintArtwork(S) {
+  const art = document.createElement('canvas');
+  art.width = art.height = S;
+  ctx = art.getContext('2d');
+  u = S / 2400;
+  rand = mulberry32(SEED);
+  const cx = S / 2, cy = S / 2, Rm = 420 * u;
+  paintGround(S);
+  paintMoon(cx, cy, Rm);
+  paintRings(cx, cy, Rm, S);
+  const v = ctx.createRadialGradient(cx, cy, S * 0.38, cx, cy, S * 0.74);
+  v.addColorStop(0, 'rgba(4,7,14,0)');
+  v.addColorStop(1, 'rgba(4,7,14,0.5)');
+  ctx.fillStyle = v;
+  ctx.fillRect(0, 0, S, S);
+  grain(S, S, 10);
+  return art;
+}
+
+// ---------- the print (poster mode) ----------
+function paintPaper(w, h) {
+  ctx.fillStyle = rgba(PAPER);
+  ctx.fillRect(0, 0, w, h);
+  for (let i = 0; i < 120; i++) {
+    softSpot(rr(0, w), rr(0, h), rr(0.05, 0.25) * w, pick([[244, 240, 230], [228, 220, 202], [234, 226, 210]]), rr(0.08, 0.2));
+  }
+  fibers(5200, [0, 0, w, h], [[250, 247, 240], [255, 255, 250]], [0.25, 0.55], [14, 110], [0.5, 1.4]);
+  fibers(2600, [0, 0, w, h], [[206, 196, 176], [196, 186, 164]], [0.08, 0.2], [10, 80], [0.4, 1.1]);
+  // bark flecks, as in handmade dak paper
+  for (let i = 0; i < 90; i++) {
+    const x = rr(0, w), y = rr(0, h);
+    ctx.fillStyle = rgba(pick([[120, 100, 76], [96, 84, 70], [150, 128, 96]]), rr(0.2, 0.5));
+    blob(x, y, rr(0.8, 2.6) * u, lobes(0.3), rr(0.6, 2) * u);
+    ctx.fill();
+  }
+}
+
+function paintSeal(x, y, size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(size);
+  const g = c.getContext('2d');
+  const prev = ctx;
+  ctx = g;
+  ctx.fillStyle = rgba(SEAL);
+  blob(size / 2, size / 2, size * 0.47, [[4, 0.012, 0.3], [9, 0.006, 1.1], [23, 0.004, 2.2]], size * 0.47);
+  ctx.save();
+  ctx.clip();
+  ctx.fillRect(0, 0, size, size);
+  ctx.restore();
+  ctx.fillRect(size * 0.08, size * 0.08, size * 0.84, size * 0.84);
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = '#000';
+  ctx.font = `900 ${size * 0.37}px "Noto Serif KR"`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  // read right column first: 丙午 / 秋夕
+  const cols = [[0.71, '丙', '午'], [0.29, '秋', '夕']];
+  for (const [fx, a, b] of cols) {
+    ctx.fillText(a, size * fx, size * 0.3);
+    ctx.fillText(b, size * fx, size * 0.72);
+  }
+  // wear of the stone and uneven ink
+  for (let i = 0; i < 260; i++) {
+    ctx.globalAlpha = rr(0.15, 0.9);
+    blob(rr(0, size), rr(0, size), rr(0.3, 1.8) * u, lobes(0.3));
+    ctx.fill();
+  }
+  ctx.globalAlpha = 0.14;
+  for (let i = 0; i < 14; i++) { blob(rr(0, size), rr(0, size), rr(0.1, 0.3) * size, lobes(0.2)); ctx.fill(); }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx = prev;
+  ctx.save();
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.drawImage(c, x, y);
+  ctx.restore();
+}
+
+function spacedText(text, x, y, font, tracking, color, align = 'left') {
+  ctx.font = font;
+  ctx.letterSpacing = `${tracking}px`;
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'alphabetic';
+  const w = ctx.measureText(text).width - tracking;
+  const x0 = align === 'right' ? x - w : align === 'center' ? x - w / 2 : x;
+  ctx.textAlign = 'left';
+  ctx.fillText(text, x0, y);
+  ctx.letterSpacing = '0px';
+  return w;
+}
+
+async function paintPoster(Wp) {
+  const Hp = Math.round(Wp * 1.25);
+  const m = Math.round(Wp * 0.075);
+  const S = Wp - 2 * m;
+  const art = paintArtwork(S);
+  canvas.width = Wp;
+  canvas.height = Hp;
+  ctx = canvas.getContext('2d');
+  u = Wp / 2400;
+  rand = mulberry32(SEED + 1);
+  paintPaper(Wp, Hp);
+  ctx.drawImage(art, m, m);
+
+  await Promise.all([
+    document.fonts.load(`300 ${96 * u}px Hahmlet`, '원무한가위'),
+    document.fonts.load(`400 ${96 * u}px "Noto Serif KR"`, '圓舞丙午年八月十五夜'),
+    document.fonts.load(`900 ${60 * u}px "Noto Serif KR"`, '丙午秋夕'),
+  ]);
+  const ink = (a) => rgba(INK, a);
+  const top = m + S;
+  const fam = 'Hahmlet, "Noto Serif KR"';
+  const titleY = top + 190 * u;
+  spacedText('원무 圓舞', m - 4 * u, titleY, `300 ${104 * u}px ${fam}`, 10 * u, ink(0.92));
+  spacedText('한가위 보름달 아래, 2026', m, titleY + 82 * u, `300 ${36 * u}px ${fam}`, 4 * u, ink(0.7));
+  const seal = 150 * u;
+  paintSeal(Wp - m - seal, titleY - 90 * u, seal);
+
+  ctx.fillStyle = ink(0.28);
+  ctx.fillRect(m, Hp - m - 88 * u, S, Math.max(1, 1.5 * u));
+  const baseY = Hp - m - 22 * u;
+  spacedText('CIRCLE DANCE UNDER THE HARVEST MOON', m, baseY, `400 ${22 * u}px ${fam}`, 6 * u, ink(0.66));
+  spacedText('丙午年 八月 十五夜', Wp - m, baseY, `400 ${24 * u}px ${fam}`, 8 * u, ink(0.66), 'right');
+  grain(Wp, Hp, 7);
+}
+
+async function render() {
+  if (MODE === 'art') {
+    const art = paintArtwork(SIZE);
+    canvas.width = canvas.height = SIZE;
+    canvas.getContext('2d').drawImage(art, 0, 0);
+  } else {
+    await paintPoster(SIZE);
+  }
+  window.__done = true;
+}
+render();
+</script>
+</body>
+</html>
