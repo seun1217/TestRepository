@@ -1,0 +1,24 @@
+{
+  "name": "garden-lens",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "카메라로 비추면 식물 이름과 주요 정보를 알려주는 PWA (순천만 국가정원용)",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "IDENTIFY_PROVIDER=mock node server.js",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "node --test tests/unit/",
+    "test:e2e": "playwright test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}

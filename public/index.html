@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#0f3d2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Garden Lens</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon.svg">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <main id="app" class="app" data-state="idle">
+    <section class="viewport" id="viewport">
+      <video id="video" class="video" autoplay playsinline muted></video>
+      <div id="overlay" class="overlay" aria-live="polite"></div>
+      <div id="hint" class="hint" role="status" hidden></div>
+      <div id="status" class="status" aria-live="polite"></div>
+    </section>
+
+    <nav class="toolbar" aria-label="카메라 조작">
+      <button id="btn-torch" class="btn btn-icon" type="button" aria-pressed="false" title="플래시" hidden>
+        <span aria-hidden="true">🔦</span><span class="btn-label">플래시</span>
+      </button>
+      <button id="btn-scan" class="btn btn-primary" type="button">
+        <span class="btn-label">지금 인식</span>
+      </button>
+      <button id="btn-toggle-auto" class="btn btn-icon" type="button" aria-pressed="true" title="자동 인식">
+        <span aria-hidden="true">🔁</span><span class="btn-label">자동</span>
+      </button>
+    </nav>
+
+    <div id="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" aria-hidden="true" hidden>
+      <div class="sheet-backdrop" data-sheet-close></div>
+      <article class="sheet-panel">
+        <header class="sheet-header">
+          <div class="sheet-handle" aria-hidden="true"></div>
+          <h2 id="sheet-title" class="sheet-title" data-field="name_ko"></h2>
+          <p class="sheet-subtitle">
+            <em data-field="name_sci"></em>
+            <span class="sheet-sep" aria-hidden="true">·</span>
+            <span data-field="name_en"></span>
+          </p>
+          <p class="sheet-meta">
+            <span data-field="family_ko"></span>
+            <span class="sheet-sep" aria-hidden="true">·</span>
+            <span>확신도 <strong data-field="confidence"></strong></span>
+          </p>
+          <ul class="sheet-tags" data-field="tags"></ul>
+          <button class="sheet-close" type="button" aria-label="닫기" data-sheet-close>✕</button>
+        </header>
+        <div class="sheet-body">
+          <p class="sheet-summary" data-field="summary_ko"></p>
+          <div class="sheet-detail" data-field="detail_ko"></div>
+        </div>
+      </article>
+    </div>
+  </main>
+
+  <noscript>이 앱은 JavaScript가 필요합니다.</noscript>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

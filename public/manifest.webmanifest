@@ -1,0 +1,15 @@
+{
+  "name": "Garden Lens: 정원 식물 인식",
+  "short_name": "Garden Lens",
+  "description": "카메라로 비추면 식물 이름과 주요 정보를 알려줍니다.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1410",
+  "theme_color": "#0f3d2e",
+  "lang": "ko",
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icons/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
