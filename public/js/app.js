@@ -16,6 +16,8 @@ const sheetEl = $("#sheet");
 const btnScan = $("#btn-scan");
 const btnTorch = $("#btn-torch");
 const btnAuto = $("#btn-toggle-auto");
+const viewportEl = $("#viewport");
+const toolbarEl = $("#toolbar");
 
 const state = {
   stream: null,
@@ -43,9 +45,21 @@ function showHint(message, kind = "info") {
     delete hintEl.dataset.kind;
     return;
   }
+  // 같은 안내를 반복해서 쓰지 않는다 (role=status 라이브 영역이 250ms마다 다시 읽히는 것을 막는다).
+  if (!hintEl.hidden && hintEl.textContent === message && hintEl.dataset.kind === kind) return;
   hintEl.textContent = message;
   hintEl.dataset.kind = kind;
   hintEl.hidden = false;
+}
+
+// 현재 상태에 맞는 상태 문구로 되돌린다 (요청 종료, 카메라 복구 뒤).
+function restoreStatus() {
+  const r = state.lastResult;
+  if (r?.quality === "ok" && r.plants?.length) {
+    setStatus(`식물 ${r.plants.length}개: ${r.plants.map((p) => p.name_ko).join(", ")}`);
+  } else {
+    setStatus(state.autoScan ? "자동 인식 중" : "자동 인식 꺼짐");
+  }
 }
 
 function setStatus(text) {
@@ -64,7 +78,7 @@ function paintResult(result) {
     onSelect: openDetail,
   });
   const names = result.plants.map((p) => p.name_ko).join(", ");
-  setStatus(`${result.plants.length}개 식물: ${names}`);
+  setStatus(`식물 ${result.plants.length}개: ${names}`);
 }
 
 function isSheetOpen() {
@@ -104,6 +118,9 @@ function requestDetail(plant) {
 function openDetail(plant) {
   state.sheetPlant = plant;
   state.scanner?.stop();
+  // 시트가 열린 동안 뒤쪽 화면은 키보드로도 닿지 않게 한다.
+  viewportEl.inert = true;
+  toolbarEl.inert = true;
   openSheet(sheetEl, plant);
   if (!plant?.detail_ko) requestDetail(plant);
 }
@@ -111,15 +128,26 @@ function openDetail(plant) {
 // 닫기 버튼, 배경, Escape가 모두 여기로 온다. 이미 닫혀 있으면 아무것도 하지 않는다.
 function closeDetail() {
   if (!isSheetOpen()) return;
+  const plantId = state.sheetPlant?.id;
   closeSheet(sheetEl);
   state.sheetPlant = null;
+  viewportEl.inert = false;
+  toolbarEl.inert = false;
+  // 시트가 열린 사이 오버레이가 다시 그려졌으면 같은 식물의 툴팁(없으면 인식 버튼)으로 포커스를 보낸다.
+  setTimeout(() => {
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected && !sheetEl.contains(active)) return;
+    const tip = plantId != null ? overlayEl.querySelector(`.plant-tip[data-plant-id="${CSS.escape(String(plantId))}"]`) : null;
+    (tip || btnScan).focus({ preventScroll: true });
+  }, 320);
   if (state.autoScan && !document.hidden) state.scanner?.start();
 }
 
 function handleResult(result) {
   if (result.quality !== "ok") {
     paintResult(null);
-    showHint(result.message_ko || hintFor(result.quality, { torchSupported: state.torchSupported, torchOn: state.torchOn }));
+    const local = hintFor(result.quality, { torchSupported: state.torchSupported, torchOn: state.torchOn });
+    showHint(result.quality === "too_dark" ? local : result.message_ko || local);
     setStatus("");
     return;
   }
@@ -130,7 +158,7 @@ function handleResult(result) {
 // 요청 실패: 안내만 띄우고 이미 그려진 결과는 그대로 둔다 (스캐너가 백오프 후 다시 시도한다).
 function handleError(err) {
   showHint(err?.message_ko || "알 수 없는 오류가 발생했습니다.", "error");
-  if (!state.lastResult) setStatus("");
+  restoreStatus();
 }
 
 // 씬이 바뀌어 스캐너가 결과를 버렸다: 오버레이를 지우고 다음 결과를 기다린다.
@@ -190,6 +218,7 @@ function buildScanner() {
       setState(busy ? "busy" : "ready");
       btnScan.disabled = busy;
       if (busy) setStatus("인식 중");
+      else restoreStatus();
     },
   });
 }
@@ -237,10 +266,8 @@ async function ensureCameraLive() {
       showHint(null);
       setState("ready");
     }
-    if (state.autoScan && !isSheetOpen() && !document.hidden) {
-      state.scanner?.start();
-      setStatus("자동 인식 중");
-    }
+    if (state.autoScan && !isSheetOpen() && !document.hidden) state.scanner?.start();
+    restoreStatus();
   })().finally(() => {
     resuming = null;
   });
@@ -270,7 +297,9 @@ async function boot() {
   if (state.autoScan) state.scanner.start();
 }
 
-btnScan.addEventListener("click", () => state.scanner?.scanNow());
+btnScan.addEventListener("click", () => {
+  if (!isSheetOpen()) state.scanner?.scanNow();
+});
 btnTorch.addEventListener("click", toggleTorch);
 btnAuto.addEventListener("click", toggleAuto);
 sheetEl.addEventListener("click", (e) => {

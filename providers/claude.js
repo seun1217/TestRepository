@@ -22,7 +22,10 @@ export const MESSAGES = {
   upstream: "식물 인식 서버에 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.",
   refused: "이 장면은 분석할 수 없습니다. 다른 식물을 비춰 주세요.",
   truncated: "설명이 너무 길어 응답이 잘렸습니다. 다시 시도해 주세요.",
-  unparsable: "모델 응답을 해석하지 못했습니다. 다시 시도해 주세요.",
+  unparsable: "서버 응답을 읽지 못했습니다. 다시 시도해 주세요.",
+  describe_connection: "식물 설명 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+  describe_upstream: "식물 설명 서버에 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.",
+  describe_refused: "이 식물의 설명을 만들 수 없습니다. 다른 식물을 선택해 주세요.",
   bad_media_type: "지원하지 않는 이미지 형식입니다. JPEG, PNG, WebP, GIF만 보낼 수 있습니다.",
   no_plant_name: "설명할 식물 이름이 필요합니다.",
 };
@@ -329,5 +332,21 @@ export default async function identify({ imageBase64, mediaType = "image/jpeg", 
 // 2단계: 같은 이미지에서 식물 하나의 상세 설명을 받는다 (계약 3절).
 export async function describe({ imageBase64, mediaType = "image/jpeg", width, height, lang = "ko", plant } = {}) {
   const request = buildDescribeRequest({ imageBase64, mediaType, width, height, lang, plant });
-  return parseDescribeResponse(await createMessage(request));
+  try {
+    return parseDescribeResponse(await createMessage(request));
+  } catch (err) {
+    throw describeError(err);
+  }
+}
+
+// 상세 설명 단계의 오류는 시트 안에 보이므로 "인식 서버"나 "다른 식물을 비춰 주세요" 대신 그 상황에 맞는 문구로 바꾼다.
+const DESCRIBE_MESSAGE_MAP = new Map([
+  [MESSAGES.connection, MESSAGES.describe_connection],
+  [MESSAGES.upstream, MESSAGES.describe_upstream],
+  [MESSAGES.refused, MESSAGES.describe_refused],
+]);
+function describeError(err) {
+  const mapped = DESCRIBE_MESSAGE_MAP.get(err?.message_ko);
+  if (mapped) err.message_ko = mapped;
+  return err;
 }

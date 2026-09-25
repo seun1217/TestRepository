@@ -177,7 +177,7 @@ test("tooltip opens the detail sheet, closes, reopens by keyboard and closes wit
   await expect(sheet).toBeVisible();
   await expect(sheet).toHaveAttribute("aria-hidden", "false");
   await expect(page.locator("#sheet-title")).toHaveText("동백나무");
-  await expect(page.locator("#sheet em[data-field=name_sci]")).toHaveText("Camellia japonica");
+  await expect(page.locator("#sheet i[data-field=name_sci]")).toHaveText("Camellia japonica");
   await expect(page.locator("#sheet [data-field=name_en]")).toHaveText("Japanese camellia");
   await expect(page.locator("#sheet [data-field=family_ko]")).toHaveText("차나무과");
   await expect(page.locator("#sheet [data-field=confidence]")).toHaveText("91%");

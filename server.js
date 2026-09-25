@@ -259,7 +259,7 @@ app.post("/api/describe", rateLimitApi, async (req, res) => {
       debug: PROVIDER_NAME === "mock" ? body.debug : undefined,
     });
     const detail_ko = typeof raw?.detail_ko === "string" ? raw.detail_ko.trim() : "";
-    if (!detail_ko) return sendError(res, 502, "upstream_error", "모델 응답을 해석하지 못했습니다. 다시 시도해 주세요.");
+    if (!detail_ko) return sendError(res, 502, "upstream_error", "서버 응답을 읽지 못했습니다. 다시 시도해 주세요.");
     res.json({
       detail_ko,
       model: raw?.model || MODEL,

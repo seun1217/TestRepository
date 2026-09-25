@@ -73,7 +73,7 @@ function renderDetail(sheetEl, makeNodes, { busy = false } = {}) {
 
 function fill(sheetEl, plant) {
   const p = plant || {};
-  setText(sheetEl, "name_ko", p.name_ko);
+  setText(sheetEl, "name_ko", p.name_ko || "이름 미상");
   setText(sheetEl, "name_sci", p.name_sci);
   setText(sheetEl, "name_en", p.name_en);
   setText(sheetEl, "family_ko", p.family_ko);

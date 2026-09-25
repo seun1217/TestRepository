@@ -70,6 +70,7 @@ body {
   background: var(--tip-bg);
   color: var(--fg);
   font: 600 15px/1.2 inherit;
+  min-height: 44px; /* 터치 목표 크기 */
   white-space: nowrap;
   max-width: calc(100% - 16px); /* 아주 긴 이름은 말줄임 */
   overflow: hidden;
@@ -104,10 +105,18 @@ body {
   position: absolute;
   left: 16px;
   bottom: 12px;
+  max-width: calc(100% - 32px);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(8, 20, 14, 0.75); /* 밝은 장면 위에서도 대비를 유지한다 */
+  backdrop-filter: blur(6px);
   font-size: 13px;
   color: var(--muted);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+.status:empty { display: none; }
 .app[data-state="busy"] .status::before {
   content: "";
   display: inline-block;
@@ -137,6 +146,7 @@ body {
   border: 0;
   border-radius: 999px;
   padding: 12px 18px;
+  min-height: 44px;
   font: 600 15px/1 inherit;
   color: var(--fg);
   background: #1b2b24;
@@ -182,11 +192,13 @@ body {
 /* 비어 있는 필드 옆의 구분점은 숨긴다 (예: 영문명이 없을 때). */
 [data-field]:empty + .sheet-sep { display: none; }
 .sheet-sep:has(+ [data-field]:empty) { display: none; }
+.sheet-tags:empty { display: none; }
+.sheet-meta .sheet-confidence:has(> [data-field="confidence"]:empty) { display: none; }
 .sheet-tags { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 0 0 8px; }
 .sheet-tags li { padding: 4px 10px; border-radius: 999px; background: #244a38; font-size: 13px; }
 .sheet-close {
   position: absolute; top: 0; right: 0;
-  width: 36px; height: 36px; border-radius: 50%; border: 0;
+  width: 44px; height: 44px; border-radius: 50%; border: 0;
   background: #24352d; color: var(--fg); font-size: 16px; cursor: pointer;
 }
 .sheet-summary { font-size: 17px; line-height: 1.5; margin: 12px 0; }
@@ -209,7 +221,9 @@ body {
   .sheet-loading::before { animation: none; border-top-color: var(--accent); }
 }
 .sheet-error { color: var(--danger); }
-.sheet-retry { padding: 8px 14px; font-size: 14px; margin: 0 0 12px; }
+.sheet-retry { padding: 8px 14px; font-size: 14px; margin: 0 0 12px;
+  min-height: 44px;
+}
 
 @media (min-width: 720px) {
   .app { max-width: 520px; margin: 0 auto; }

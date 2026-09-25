@@ -28,12 +28,13 @@ function makeTip(plant, onSelect) {
   tip.className = "plant-tip";
   tip.tabIndex = 0;
   tip.dataset.plantId = String(plant.id ?? "");
-  tip.setAttribute("aria-label", `${plant.name_ko} 상세 보기`);
+  const conf = formatConfidence(plant.confidence);
+  tip.setAttribute("aria-label", conf ? `${plant.name_ko}, 확신도 ${conf}, 상세 보기` : `${plant.name_ko} 상세 보기`);
   tip.append(document.createTextNode(String(plant.name_ko ?? "")));
-  const conf = document.createElement("span");
-  conf.className = "tip-conf";
-  conf.textContent = formatConfidence(plant.confidence);
-  tip.append(conf);
+  const confEl = document.createElement("span");
+  confEl.className = "tip-conf";
+  confEl.textContent = conf;
+  tip.append(confEl);
 
   const select = () => {
     if (typeof onSelect === "function") onSelect(plant);

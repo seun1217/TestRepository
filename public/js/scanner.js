@@ -78,7 +78,8 @@ export function createScanner({
         hasResult = false;
         retryStreak += 1;
         retryAt = now() + Math.min(retryHoldMaxMs, retryHoldMs * 2 ** (retryStreak - 1));
-        const msg = res?.message_ko || localHint(res?.quality);
+        // too_dark는 기기의 플래시 지원 여부에 따라 문구가 달라지므로 서버 문구 대신 로컬 문구를 쓴다.
+        const msg = res?.quality === "too_dark" ? localHint("too_dark") : res?.message_ko || localHint(res?.quality);
         serverHint = Boolean(msg);
         lastServerMsg = msg || null;
         if (msg) call(onHint, msg);
