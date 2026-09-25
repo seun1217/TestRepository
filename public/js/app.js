@@ -311,7 +311,17 @@ async function ensureCameraLive() {
   return resuming;
 }
 
-async function boot() {
+// 카메라가 열리는 사이 "지금 인식"을 눌러도 두 번째 부팅(스트림과 스캐너 중복)이 생기지 않게 한 번에 하나만 돈다.
+let booting = null;
+function boot() {
+  if (booting) return booting;
+  booting = bootOnce().finally(() => {
+    booting = null;
+  });
+  return booting;
+}
+
+async function bootOnce() {
   setState("starting");
   setStatus("카메라를 여는 중");
   try {

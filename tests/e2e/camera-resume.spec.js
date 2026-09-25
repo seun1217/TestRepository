@@ -41,3 +41,15 @@ test("a hidden then visible tab with a live track just restarts the scanner with
   await expect.poll(() => page.evaluate(() => window.__gardenLens.scanner.isRunning()), { timeout: 5000 }).toBe(true);
   expect(await page.evaluate(() => window.__gardenLens.stream.id)).toBe(streamId);
 });
+
+test("a muted track pauses the scanner with a hint and unmute resumes it", async ({ page }) => {
+  await installFakeCamera(page, "bright");
+  await gotoApp(page);
+  await waitForTips(page, 2, 8000);
+  await page.evaluate(() => window.__gardenLens.track.dispatchEvent(new Event("mute")));
+  await expect.poll(() => page.evaluate(() => window.__gardenLens.scanner.isRunning())).toBe(false);
+  await expect(page.locator("#hint")).toContainText("잠시 멈췄습니다");
+  await page.evaluate(() => window.__gardenLens.track.dispatchEvent(new Event("unmute")));
+  await expect.poll(() => page.evaluate(() => window.__gardenLens.scanner.isRunning()), { timeout: 5000 }).toBe(true);
+  await expect(page.locator("#hint")).toBeHidden();
+});
