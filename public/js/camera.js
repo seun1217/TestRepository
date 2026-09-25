@@ -1,5 +1,8 @@
 // 카메라 제어 (브라우저 전용). docs/CONTRACT.md 4절 camera.js.
-const SAMPLE_SIDE = 160; // 품질 분석용 샘플의 긴 변
+// 품질 분석용 샘플은 항상 같은 크기다. 회전이나 주소창 표시로 보이는 영역의 비율이 바뀌어도
+// 샘플 크기가 그대로여야 frameDiff가 "크기 불일치 = 씬 변화"로 오판하지 않는다 (왜곡은 밝기/선명도 판정에 영향이 없다).
+const SAMPLE_W = 160;
+const SAMPLE_H = 120;
 const READY_TIMEOUT_MS = 5000; // videoWidth가 채워지길 기다리는 최대 시간
 const READY_POLL_MS = 50;
 
@@ -132,28 +135,44 @@ function resizeCanvas(canvas, w, h) {
   if (canvas.height !== h) canvas.height = h;
 }
 
-export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85 } = {}) {
+const isPositive = (v) => Number.isFinite(v) && v > 0;
+const clampInt = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v)));
+
+// object-fit: cover로 실제 보이는 원본 영역 (비디오 픽셀 단위 정수). 비디오 중앙에서 view의 종횡비를 가진 최대 사각형.
+// viewW 또는 viewH가 0이거나 비정상이면 자르지 않고 전체 프레임을 돌려준다.
+function computeCropRect(videoW, videoH, viewW, viewH) {
+  if (!isPositive(viewW) || !isPositive(viewH)) return { sx: 0, sy: 0, sw: videoW, sh: videoH, videoW, videoH };
+  const scale = Math.max(viewW / videoW, viewH / videoH);
+  const sw = clampInt(viewW / scale, 1, videoW);
+  const sh = clampInt(viewH / scale, 1, videoH);
+  const sx = Math.round((videoW - sw) / 2);
+  const sy = Math.round((videoH - sh) / 2);
+  return { sx, sy, sw, sh, videoW, videoH };
+}
+
+// 보이는 영역(object-fit: cover)만 잘라 JPEG로 만든다. bbox는 이 잘린 이미지 기준이므로 crop을 함께 돌려준다.
+export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, viewH } = {}) {
   const vw = videoEl?.videoWidth | 0;
   const vh = videoEl?.videoHeight | 0;
   if (vw <= 0 || vh <= 0) return null;
+  const crop = computeCropRect(vw, vh, viewW ?? videoEl.clientWidth, viewH ?? videoEl.clientHeight);
 
   try {
     ensureCanvases();
     if (!captureCtx || !sampleCtx) return null;
 
-    const full = fitSize(vw, vh, maxSide);
+    const full = fitSize(crop.sw, crop.sh, maxSide);
     resizeCanvas(captureCanvas, full.w, full.h);
-    captureCtx.drawImage(videoEl, 0, 0, full.w, full.h);
+    captureCtx.drawImage(videoEl, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, full.w, full.h);
     const dataUrl = captureCanvas.toDataURL("image/jpeg", quality);
     const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
 
-    // 분석 샘플은 이미 축소된 캡처 캔버스에서 한 번 더 줄여 앨리어싱을 줄인다.
-    const small = fitSize(full.w, full.h, SAMPLE_SIDE);
-    resizeCanvas(sampleCanvas, small.w, small.h);
-    sampleCtx.drawImage(captureCanvas, 0, 0, small.w, small.h);
-    const imageData = sampleCtx.getImageData(0, 0, small.w, small.h);
+    // 분석 샘플은 이미 잘려 축소된 캡처 캔버스에서 한 번 더 줄여 앨리어싱을 줄인다.
+    resizeCanvas(sampleCanvas, SAMPLE_W, SAMPLE_H);
+    sampleCtx.drawImage(captureCanvas, 0, 0, SAMPLE_W, SAMPLE_H);
+    const imageData = sampleCtx.getImageData(0, 0, SAMPLE_W, SAMPLE_H);
 
-    return { dataUrl, base64, width: full.w, height: full.h, imageData };
+    return { dataUrl, base64, width: full.w, height: full.h, imageData, crop };
   } catch {
     // 비디오가 아직 그릴 수 없는 상태이거나 캔버스 오류: 이번 프레임은 건너뛴다.
     return null;

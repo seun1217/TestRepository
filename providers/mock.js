@@ -28,15 +28,34 @@ const PLANTS = [
   },
 ];
 
+const FALLBACK_DETAIL = "이 식물에 대한 상세 설명을 준비하지 못했습니다.";
+const ZERO_USAGE = { input_tokens: 0, output_tokens: 0 };
+
 export default async function identify({ debug } = {}) {
   if (debug && ["too_dark", "too_far", "blurry", "no_plant"].includes(debug)) {
-    return { quality: debug, message_ko: null, plants: [], model: "mock", usage: { input_tokens: 0, output_tokens: 0 } };
+    return { quality: debug, message_ko: null, plants: [], model: "mock", usage: { ...ZERO_USAGE } };
   }
+  // debug "lazy": 1단계 응답에 상세를 비워 클라이언트의 describe 경로를 시험한다.
+  const lazy = debug === "lazy";
   return {
     quality: "ok",
     message_ko: null,
-    plants: PLANTS.map((p) => ({ ...p, bbox: { ...p.bbox }, tags: [...p.tags] })),
+    plants: PLANTS.map((p) => ({ ...p, bbox: { ...p.bbox }, tags: [...p.tags], detail_ko: lazy ? "" : p.detail_ko })),
     model: "mock",
-    usage: { input_tokens: 0, output_tokens: 0 },
+    usage: { ...ZERO_USAGE },
   };
+}
+
+// 2단계: 이름이 표의 식물과 같으면 그 상세를, 아니면 안내 한 문단을 돌려준다. debug "error"는 502를 흉내 낸다.
+export async function describe({ plant, debug } = {}) {
+  if (debug === "error") {
+    const err = new Error("mock describe failure");
+    err.status = 502;
+    err.code = "upstream_error";
+    err.message_ko = "식물 설명 서버에 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.";
+    throw err;
+  }
+  const name = String(plant?.name_ko || "").trim();
+  const found = PLANTS.find((p) => p.name_ko === name);
+  return { detail_ko: found ? found.detail_ko : FALLBACK_DETAIL, model: "mock", usage: { ...ZERO_USAGE } };
 }

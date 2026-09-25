@@ -49,15 +49,26 @@ function sample(v, verdict = "ok") {
 }
 
 const OK_RESULT = { quality: "ok", message_ko: null, plants: [{ id: "p1", name_ko: "동백나무" }] };
+// captureFrame이 돌려주는 crop 기록. 스캐너는 이 값을 그대로 identify에 넘겨야 한다.
+const CROP = { sx: 100, sy: 0, sw: 440, sh: 480, videoW: 640, videoH: 480 };
 
 function setup(overrides = {}) {
   const clock = makeClock();
-  // scene: capture()가 돌려줄 현재 프레임. 테스트가 v/verdict를 바꾼다.
-  const scene = { v: 0.5, verdict: "ok", frame: true };
+  // scene: capture()가 돌려줄 현재 프레임. 테스트가 v/verdict를 바꾼다. crop이 null이면 프레임에 crop 키를 넣지 않는다.
+  const scene = { v: 0.5, verdict: "ok", frame: true, crop: { ...CROP } };
   const calls = { identify: [], hints: [], results: [], errors: [], busy: [], sceneChanges: 0 };
   let identifyImpl = async () => ({ ...OK_RESULT });
   const scanner = createScanner({
-    capture: () => (scene.frame ? { base64: "QUJD", width: 640, height: 480, imageData: sample(scene.v, scene.verdict) } : null),
+    capture: () =>
+      scene.frame
+        ? {
+            base64: "QUJD",
+            width: 640,
+            height: 480,
+            imageData: sample(scene.v, scene.verdict),
+            ...(scene.crop ? { crop: scene.crop } : {}),
+          }
+        : null,
     analyze: (img) => ({ luminance: img.v * 255, sharpness: 100, verdict: img.verdict }),
     diff: (a, b) => Math.abs(a.v - b.v),
     identify: (payload) => {
@@ -138,8 +149,13 @@ test("안정된 뒤 요청하고, ok 결과가 있으면 씬이 바뀔 때까지
   assert.equal(calls.identify.length, 1);
   assert.equal(calls.identify[0].at, 500);
   assert.deepEqual(
-    { base64: calls.identify[0].base64, width: calls.identify[0].width, height: calls.identify[0].height },
-    { base64: "QUJD", width: 640, height: 480 }
+    {
+      base64: calls.identify[0].base64,
+      width: calls.identify[0].width,
+      height: calls.identify[0].height,
+      crop: calls.identify[0].crop,
+    },
+    { base64: "QUJD", width: 640, height: 480, crop: CROP }
   );
   assert.deepEqual(calls.busy, [true, false]);
   assert.equal(calls.results.length, 1);
@@ -208,6 +224,17 @@ test("scanNow는 간격과 안정 조건을 무시하고 즉시 요청한다", a
   assert.equal(calls.identify.length, 2);
   assert.equal(calls.identify[1].at, 600);
   assert.equal(calls.results.length, 2);
+});
+
+test("프레임에 crop이 없으면 identify에 crop: null을 넘긴다", async () => {
+  const { scene, calls, scanner } = setup();
+  scene.crop = null;
+  scanner.scanNow();
+  await flush();
+  assert.equal(calls.identify.length, 1);
+  assert.ok("crop" in calls.identify[0], "crop 키는 항상 있어야 한다");
+  assert.equal(calls.identify[0].crop, null);
+  assert.equal(calls.identify[0].base64, "QUJD");
 });
 
 test("scanNow는 루프가 꺼져 있어도 동작하고, 너무 어두우면 안내만 한다", async () => {

@@ -3,8 +3,8 @@ import { startCamera, captureFrame, setTorch, stopCamera } from "./camera.js";
 import { analyzeFrame, frameDiff, hintFor } from "./quality.js";
 import { createScanner } from "./scanner.js";
 import { renderOverlay, clearOverlay } from "./overlay.js";
-import { openSheet, closeSheet } from "./sheet.js";
-import { identify } from "./api.js";
+import { openSheet, closeSheet, setSheetDetail } from "./sheet.js";
+import { identify, describe } from "./api.js";
 
 const $ = (sel) => document.querySelector(sel);
 const app = $("#app");
@@ -25,7 +25,12 @@ const state = {
   lastResult: null,
   autoScan: true,
   scanner: null,
+  sheetPlant: null, // 시트에 보이는 식물 객체 (id는 결과마다 p1, p2로 반복되므로 객체로 구분한다)
+  describing: new WeakMap(), // 식물 객체 -> 진행 중인 describe 약속 (같은 식물에 요청을 겹쳐 보내지 않는다)
 };
+
+const NO_FRAME_MESSAGE = "이 결과에 사용할 이미지가 없습니다. 다시 인식해 주세요.";
+const DESCRIBE_FALLBACK_MESSAGE = "상세 설명을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
 function setState(name) {
   app.dataset.state = name;
@@ -56,10 +61,59 @@ function paintResult(result) {
   renderOverlay(overlayEl, result.plants, {
     videoEl,
     crop: result.frame?.crop || null,
-    onSelect: (plant) => openSheet(sheetEl, plant),
+    onSelect: openDetail,
   });
   const names = result.plants.map((p) => p.name_ko).join(", ");
   setStatus(`${result.plants.length}개 식물: ${names}`);
+}
+
+function isSheetOpen() {
+  return !sheetEl.hidden;
+}
+
+// 2단계: 시트에 보이는 식물의 상세 설명을 받는다. 성공하면 식물 객체에 캐시하고, 늦게 온 응답은 시트가 그 식물을 보여줄 때만 반영한다.
+function requestDetail(plant) {
+  if (!plant || state.describing.has(plant)) return;
+  const frame = state.lastResult?.frame;
+  if (!frame?.base64) {
+    setSheetDetail(sheetEl, plant.id, { error: NO_FRAME_MESSAGE });
+    return;
+  }
+  const pending = describe({ ...frame, plant })
+    .then((res) => {
+      const detail = String(res?.detail_ko || "").trim();
+      if (!detail) throw Object.assign(new Error("empty_detail"), { message_ko: DESCRIBE_FALLBACK_MESSAGE });
+      plant.detail_ko = detail;
+      if (state.sheetPlant === plant) setSheetDetail(sheetEl, plant.id, { detail_ko: detail });
+    })
+    .catch((err) => {
+      if (state.sheetPlant !== plant) return;
+      setSheetDetail(sheetEl, plant.id, {
+        error: err?.message_ko || DESCRIBE_FALLBACK_MESSAGE,
+        onRetry: () => {
+          setSheetDetail(sheetEl, plant.id, {});
+          requestDetail(plant);
+        },
+      });
+    })
+    .finally(() => state.describing.delete(plant));
+  state.describing.set(plant, pending);
+}
+
+// 툴팁 선택: 사용자가 읽는 동안 씬이 바뀌어도 요청하지 않도록 스캐너를 멈추고 시트를 연다.
+function openDetail(plant) {
+  state.sheetPlant = plant;
+  state.scanner?.stop();
+  openSheet(sheetEl, plant);
+  if (!plant?.detail_ko) requestDetail(plant);
+}
+
+// 닫기 버튼, 배경, Escape가 모두 여기로 온다. 이미 닫혀 있으면 아무것도 하지 않는다.
+function closeDetail() {
+  if (!isSheetOpen()) return;
+  closeSheet(sheetEl);
+  state.sheetPlant = null;
+  if (state.autoScan && !document.hidden) state.scanner?.start();
 }
 
 function handleResult(result) {
@@ -103,7 +157,7 @@ function toggleAuto() {
   state.autoScan = !state.autoScan;
   btnAuto.setAttribute("aria-pressed", String(state.autoScan));
   if (state.autoScan) {
-    state.scanner?.start();
+    if (!isSheetOpen()) state.scanner?.start();
     setStatus("자동 인식 중");
   } else {
     state.scanner?.stop();
@@ -170,10 +224,10 @@ btnScan.addEventListener("click", () => state.scanner?.scanNow());
 btnTorch.addEventListener("click", toggleTorch);
 btnAuto.addEventListener("click", toggleAuto);
 sheetEl.addEventListener("click", (e) => {
-  if (e.target.closest("[data-sheet-close]")) closeSheet(sheetEl);
+  if (e.target.closest("[data-sheet-close]")) closeDetail();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeSheet(sheetEl);
+  if (e.key === "Escape") closeDetail();
 });
 
 let resizeTimer = 0;
@@ -190,7 +244,7 @@ videoEl.addEventListener("loadedmetadata", onLayoutChange);
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     state.scanner?.stop();
-  } else if (state.autoScan) {
+  } else if (state.autoScan && !isSheetOpen()) {
     state.scanner?.start();
   }
 });

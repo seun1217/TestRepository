@@ -14,10 +14,14 @@ const { default: app, normalizeResponse } = await import("../../server.js");
 // 환경 변수는 모듈 로드 시점에 읽히므로, 쿼리 문자열로 캐시를 우회해 설정이 다른 인스턴스를 따로 만든다.
 process.env.RATE_LIMIT_PER_MIN = "3";
 const { default: limitedApp } = await import("../../server.js?instance=limit3");
+const { default: sharedBucketApp } = await import("../../server.js?instance=limit3-describe");
 process.env.TRUST_PROXY = "1";
 const { default: proxiedApp } = await import("../../server.js?instance=limit3-proxy");
-delete process.env.RATE_LIMIT_PER_MIN;
 delete process.env.TRUST_PROXY;
+// describe 스위트는 요청이 많아 기본 버킷(분당 20회)을 넘길 수 있으므로 제한 없는 인스턴스를 쓴다.
+process.env.RATE_LIMIT_PER_MIN = "0";
+const { default: unlimitedApp } = await import("../../server.js?instance=unlimited");
+delete process.env.RATE_LIMIT_PER_MIN;
 
 const JPEG_B64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDA==";
 const KOREAN = /[가-힣]/;
@@ -34,8 +38,8 @@ function close(server) {
   return new Promise((resolve) => server.close(resolve));
 }
 
-async function postIdentify(base, body, headers = {}) {
-  const res = await fetch(`${base}/api/identify`, {
+async function postJson(base, route, body, headers = {}) {
+  const res = await fetch(`${base}${route}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...headers },
     body: typeof body === "string" ? body : JSON.stringify(body),
@@ -49,7 +53,12 @@ async function postIdentify(base, body, headers = {}) {
   return { res, json };
 }
 
+const postIdentify = (base, body, headers) => postJson(base, "/api/identify", body, headers);
+const postDescribe = (base, body, headers) => postJson(base, "/api/describe", body, headers);
+
 const goodBody = { image: JPEG_B64, width: 1024, height: 768, lang: "ko" };
+const camellia = { id: "p1", name_ko: "동백나무", name_sci: "Camellia japonica", bbox: { x: 0.1, y: 0.15, w: 0.35, h: 0.5 } };
+const describeBody = { ...goodBody, plant: camellia };
 
 describe("server: health", () => {
   let server;
@@ -104,6 +113,22 @@ describe("server: POST /api/identify", () => {
     assert.match(json.message_ko, /^너무 어둡습니다/);
   });
 
+  test("debug lazy returns both plants with an empty detail_ko (stage 1 only)", async () => {
+    const { res, json } = await postIdentify(base, { ...goodBody, debug: "lazy" });
+    assert.equal(res.status, 200);
+    assert.equal(json.quality, "ok");
+    assert.deepEqual(json.plants.map((p) => p.name_ko), ["동백나무", "수국"]);
+    for (const p of json.plants) {
+      assert.equal(p.detail_ko, "");
+      assert.ok(p.summary_ko.length > 0);
+    }
+  });
+
+  test("without debug the mock pre-fills detail_ko", async () => {
+    const { json } = await postIdentify(base, goodBody);
+    for (const p of json.plants) assert.ok(p.detail_ko.length > 0);
+  });
+
   test("data URL prefix is accepted", async () => {
     const { res, json } = await postIdentify(base, { ...goodBody, image: `data:image/jpeg;base64,${JPEG_B64}` });
     assert.equal(res.status, 200);
@@ -148,6 +173,110 @@ describe("server: POST /api/identify", () => {
     assert.equal(res.headers.get("cache-control"), "no-store");
     assert.equal(json.error.code, "bad_request");
     assert.match(json.error.message_ko, KOREAN);
+  });
+});
+
+describe("server: POST /api/describe", () => {
+  let server;
+  let base;
+  before(async () => ({ server, base } = await listen(unlimitedApp)));
+  after(() => close(server));
+
+  test("happy path: 동백나무 returns the mock detail paragraphs, model and usage", async () => {
+    const { res, json } = await postDescribe(base, describeBody);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(typeof json.detail_ko, "string");
+    assert.match(json.detail_ko, /^잎은 두껍고/);
+    assert.ok(json.detail_ko.includes("\n\n"), "two paragraphs separated by a blank line");
+    assert.equal(json.model, "mock");
+    assert.deepEqual(json.usage, { input_tokens: 0, output_tokens: 0 });
+  });
+
+  test("수국 by name only (no id, no bbox) is enough", async () => {
+    const { res, json } = await postDescribe(base, { ...goodBody, plant: { name_ko: "수국" } });
+    assert.equal(res.status, 200);
+    assert.match(json.detail_ko, /^6월에서 7월/);
+  });
+
+  test("unknown plant name returns the fallback sentence", async () => {
+    const { res, json } = await postDescribe(base, { ...goodBody, plant: { ...camellia, name_ko: "정체불명나무" } });
+    assert.equal(res.status, 200);
+    assert.equal(json.detail_ko, "이 식물에 대한 상세 설명을 준비하지 못했습니다.");
+  });
+
+  test("out-of-range bbox values are tolerated (clamped, not rejected)", async () => {
+    const { res } = await postDescribe(base, { ...goodBody, plant: { name_ko: "동백나무", bbox: { x: -1, y: 2, w: "9", h: null } } });
+    assert.equal(res.status, 200);
+  });
+
+  test("missing plant -> 400 bad_request with a Korean message", async () => {
+    const { res, json } = await postDescribe(base, goodBody);
+    assert.equal(res.status, 400);
+    assert.equal(json.error.code, "bad_request");
+    assert.match(json.error.message_ko, KOREAN);
+    assert.match(json.error.message_ko, /니다\.$/);
+  });
+
+  test("empty name_ko -> 400 bad_request", async () => {
+    for (const name_ko of ["", "   ", null, 42]) {
+      const { res, json } = await postDescribe(base, { ...goodBody, plant: { ...camellia, name_ko } });
+      assert.equal(res.status, 400, `name_ko=${JSON.stringify(name_ko)}`);
+      assert.equal(json.error.code, "bad_request");
+      assert.match(json.error.message_ko, KOREAN);
+    }
+  });
+
+  test("non-string id or non-object bbox -> 400 bad_request", async () => {
+    const badId = await postDescribe(base, { ...goodBody, plant: { ...camellia, id: 1 } });
+    assert.equal(badId.res.status, 400);
+    const badBox = await postDescribe(base, { ...goodBody, plant: { ...camellia, bbox: "0,0,1,1" } });
+    assert.equal(badBox.res.status, 400);
+    assert.equal(badBox.json.error.code, "bad_request");
+  });
+
+  test("image validation is shared with identify (empty image, missing size)", async () => {
+    const empty = await postDescribe(base, { ...describeBody, image: "" });
+    assert.equal(empty.res.status, 400);
+    assert.equal(empty.json.error.message_ko, "이미지가 비어 있습니다.");
+    const { width, ...noWidth } = describeBody;
+    void width;
+    const size = await postDescribe(base, noWidth);
+    assert.equal(size.res.status, 400);
+    assert.equal(size.json.error.message_ko, "이미지 크기 정보가 필요합니다.");
+  });
+
+  test("debug error -> 502 upstream_error with the Korean describe message", async () => {
+    const { res, json } = await postDescribe(base, { ...describeBody, debug: "error" });
+    assert.equal(res.status, 502);
+    assert.equal(res.headers.get("cache-control"), "no-store");
+    assert.equal(json.error.code, "upstream_error");
+    assert.equal(json.error.message_ko, "식물 설명 서버에 문제가 생겼습니다. 잠시 후 다시 시도해 주세요.");
+  });
+});
+
+describe("rate limit shared between identify and describe (RATE_LIMIT_PER_MIN=3)", () => {
+  let server;
+  let base;
+  before(async () => ({ server, base } = await listen(sharedBucketApp)));
+  after(() => close(server));
+
+  test("two identify plus one describe succeed, then either kind is 429", async () => {
+    const first = await postIdentify(base, goodBody);
+    const second = await postIdentify(base, goodBody);
+    const third = await postDescribe(base, describeBody);
+    assert.deepEqual([first.res.status, second.res.status, third.res.status], [200, 200, 200]);
+    assert.equal(third.res.headers.get("x-ratelimit-remaining"), "0");
+
+    const fourthDescribe = await postDescribe(base, describeBody);
+    assert.equal(fourthDescribe.res.status, 429);
+    assert.equal(fourthDescribe.json.error.code, "rate_limited");
+    assert.match(fourthDescribe.json.error.message_ko, KOREAN);
+    assert.ok(Number(fourthDescribe.res.headers.get("retry-after")) >= 1);
+
+    const fifthIdentify = await postIdentify(base, goodBody);
+    assert.equal(fifthIdentify.res.status, 429);
+    assert.equal(fifthIdentify.json.error.code, "rate_limited");
   });
 });
 
@@ -211,6 +340,16 @@ describe("normalizeResponse", () => {
     const odd = normalizeResponse({ quality: "weird" }, "m");
     assert.equal(odd.quality, "no_plant");
     assert.match(odd.message_ko, KOREAN);
+  });
+
+  test("detail_ko missing or non-string becomes an empty string (stage 1 may omit it)", () => {
+    const { detail_ko, ...noDetail } = plant();
+    void detail_ko;
+    const out = normalizeResponse({ quality: "ok", plants: [noDetail, plant({ detail_ko: null }), plant({ detail_ko: "  설명  " })] }, "m");
+    assert.equal(out.plants.length, 3);
+    assert.equal(out.plants[0].detail_ko, "");
+    assert.equal(out.plants[1].detail_ko, "");
+    assert.equal(out.plants[2].detail_ko, "설명");
   });
 
   test("fills model fallback and zero usage when the provider gives none", () => {

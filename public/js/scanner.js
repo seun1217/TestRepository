@@ -58,7 +58,7 @@ export function createScanner({
     serverHint = false;
     call(onBusy, true);
     try {
-      const res = await identify({ base64: frame.base64, width: frame.width, height: frame.height });
+      const res = await identify({ base64: frame.base64, width: frame.width, height: frame.height, crop: frame.crop ?? null });
       if (gen !== generation) return;
       resultSample = sample;
       if (res && res.quality === "ok") {

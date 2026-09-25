@@ -107,6 +107,36 @@ export async function waitForTips(page, count = 2, timeout = 8000) {
   return tips;
 }
 
+// 마지막 결과에 붙은 프레임 정보(base64는 길이만)와 비디오/뷰 크기. 결과가 없으면 frame 필드는 null이다.
+export function lastFrameInfo(page) {
+  return page.evaluate(() => {
+    const video = document.querySelector("#video");
+    const frame = window.__gardenLens?.lastResult?.frame || null;
+    return {
+      width: frame?.width ?? null,
+      height: frame?.height ?? null,
+      base64Length: frame?.base64?.length ?? 0,
+      crop: frame?.crop ?? null,
+      viewW: video.clientWidth,
+      viewH: video.clientHeight,
+      videoW: video.videoWidth,
+      videoH: video.videoHeight,
+    };
+  });
+}
+
+// 첫 POST /api/identify 요청을 기다린다. page.goto 전에 호출해 두고 나중에 await 한다.
+export function waitForIdentifyRequest(page) {
+  return page.waitForRequest((req) => {
+    if (req.method() !== "POST") return false;
+    try {
+      return new URL(req.url()).pathname === "/api/identify";
+    } catch {
+      return false;
+    }
+  });
+}
+
 // 각 툴팁의 style.left/top (컨테이너 기준 픽셀).
 export function tipPositions(page) {
   return page.evaluate(() =>

@@ -1,7 +1,13 @@
 // overlay-math.js 단위 테스트. object-fit: cover 기하와 툴팁 배치 규칙을 검사한다.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { computeCoverGeometry, mapBBox, anchorTooltip, resolveOverlaps } from "../../public/js/overlay-math.js";
+import {
+  computeCoverGeometry,
+  mapBBox,
+  anchorTooltip,
+  resolveOverlaps,
+  cropToVideoBBox,
+} from "../../public/js/overlay-math.js";
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `expected ${a} to be within ${eps} of ${b}`);
 const centerBox = { x: 0.5, y: 0.5, w: 0, h: 0 };
@@ -141,4 +147,80 @@ test("resolveOverlaps: 겹치지 않는 툴팁은 그대로 둔다", () => {
 
 test("resolveOverlaps: 빈 배열이면 빈 배열", () => {
   assert.deepEqual(resolveOverlaps([]), []);
+});
+
+// captureFrame이 1920x1080 비디오를 9:16 뷰에 맞춰 잘랐을 때의 crop (sh = 1080, sw = round(607.5) = 608, 중앙 정렬).
+const CROP_9_16 = Object.freeze({ sx: 656, sy: 0, sw: 608, sh: 1080, videoW: 1920, videoH: 1080 });
+const fullBox = () => ({ x: 0, y: 0, w: 1, h: 1 });
+
+test("cropToVideoBBox: crop이 없거나 비디오 크기가 0 이하면 같은 bbox 객체를 돌려준다", () => {
+  const b = Object.freeze({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+  assert.equal(cropToVideoBBox(b, null), b);
+  assert.equal(cropToVideoBBox(b, undefined), b);
+  assert.equal(cropToVideoBBox(b, { sx: 0, sy: 0, sw: 0, sh: 0, videoW: 0, videoH: 0 }), b);
+  assert.equal(cropToVideoBBox(b, { sx: 0, sy: 0, sw: 10, sh: 10, videoW: NaN, videoH: 1080 }), b);
+  assert.equal(cropToVideoBBox(b, { sx: 0, sy: 0, sw: 10, sh: 10, videoW: 1920, videoH: -1 }), b);
+});
+
+test("cropToVideoBBox: 전체 프레임 crop이면 값은 같고 새 객체를 돌려준다", () => {
+  const b = Object.freeze({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+  const out = cropToVideoBBox(b, { sx: 0, sy: 0, sw: 1920, sh: 1080, videoW: 1920, videoH: 1080 });
+  assert.notEqual(out, b);
+  assert.deepEqual(out, { x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+});
+
+test("cropToVideoBBox: 1920x1080을 9:16으로 중앙 crop하면 x 0..1이 가운데 띠로 옮겨지고 입력은 바뀌지 않는다", () => {
+  const b = Object.freeze(fullBox());
+  const out = cropToVideoBBox(b, CROP_9_16);
+  near(out.x, 656 / 1920);
+  near(out.w, 608 / 1920);
+  near(out.y, 0);
+  near(out.h, 1);
+  assert.ok(out.x > 0.3 && out.x + out.w < 0.7, "가로 가운데 띠 안에 있어야 한다");
+  near(out.x + out.w / 2, 0.5);
+  // 잘린 이미지의 가로 중앙은 전체 프레임의 가로 중앙이다.
+  near(cropToVideoBBox({ x: 0.5, y: 0.25, w: 0, h: 0 }, CROP_9_16).x, 0.5);
+  near(cropToVideoBBox({ x: 0.5, y: 0.25, w: 0, h: 0 }, CROP_9_16).y, 0.25);
+  assert.deepEqual(b, fullBox(), "bbox 입력은 바뀌지 않아야 한다");
+  assert.deepEqual(CROP_9_16, { sx: 656, sy: 0, sw: 608, sh: 1080, videoW: 1920, videoH: 1080 });
+});
+
+test("cropToVideoBBox: 세로 비디오를 가로 뷰에 맞춰 위아래를 잘랐으면 y가 가운데 띠로 옮겨진다", () => {
+  const crop = { sx: 0, sy: 656, sw: 1080, sh: 608, videoW: 1080, videoH: 1920 };
+  const out = cropToVideoBBox(fullBox(), crop);
+  near(out.x, 0);
+  near(out.w, 1);
+  near(out.y, 656 / 1920);
+  near(out.h, 608 / 1920);
+  near(out.y + out.h / 2, 0.5);
+});
+
+test("cropToVideoBBox + computeCoverGeometry + mapBBox: crop 중앙의 bbox는 요소 중앙에 놓인다", () => {
+  const full = cropToVideoBBox(centerBox, CROP_9_16);
+  for (const [elemW, elemH] of [[360, 640], [412, 766], [304, 540]]) {
+    const g = computeCoverGeometry({ videoW: 1920, videoH: 1080, elemW, elemH });
+    const r = mapBBox(full, g);
+    near(r.left, elemW / 2, 1e-6);
+    near(r.top, elemH / 2, 1e-6);
+  }
+});
+
+test("cropToVideoBBox + mapBBox: 요소가 crop과 같은 종횡비이면 crop 좌상단 bbox가 요소 (0,0)에 놓인다", () => {
+  const full = cropToVideoBBox({ x: 0, y: 0, w: 0.5, h: 0.5 }, CROP_9_16);
+  // 608x1080 = 304x540 = crop의 종횡비.
+  for (const [elemW, elemH] of [[608, 1080], [304, 540]]) {
+    const g = computeCoverGeometry({ videoW: 1920, videoH: 1080, elemW, elemH });
+    const r = mapBBox(full, g);
+    near(r.left, 0, 1e-6);
+    near(r.top, 0, 1e-6);
+    near(r.width, elemW / 2, 1e-6);
+    near(r.height, elemH / 2, 1e-6);
+  }
+  // 즉 뷰 크기가 캡처 때와 같으면 left = x*elemW, top = y*elemH가 된다.
+  const g = computeCoverGeometry({ videoW: 1920, videoH: 1080, elemW: 304, elemH: 540 });
+  const r = mapBBox(cropToVideoBBox({ x: 0.1, y: 0.15, w: 0.35, h: 0.5 }, CROP_9_16), g);
+  near(r.left, 0.1 * 304, 1e-6);
+  near(r.top, 0.15 * 540, 1e-6);
+  near(r.width, 0.35 * 304, 1e-6);
+  near(r.height, 0.5 * 540, 1e-6);
 });

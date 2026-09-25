@@ -1,6 +1,6 @@
 // 툴팁 오버레이 렌더링. docs/CONTRACT.md 4절 overlay.js.
 // 좌표 계산은 overlay-math.js에 맡기고 여기서는 DOM만 만든다.
-import { computeCoverGeometry, mapBBox, anchorTooltip, resolveOverlaps } from "./overlay-math.js";
+import { computeCoverGeometry, mapBBox, anchorTooltip, resolveOverlaps, cropToVideoBBox } from "./overlay-math.js";
 
 const TIP_MARGIN = 8;
 const TIP_GAP = 4;
@@ -50,18 +50,19 @@ function makeTip(plant, onSelect) {
 }
 
 // 오버레이를 비우고 plants를 다시 그린다. 같은 입력이면 같은 결과가 나오므로 리사이즈 때 다시 불러도 된다.
-export function renderOverlay(container, plants, { videoEl, onSelect } = {}) {
+// crop(captureFrame의 crop)이 있으면 bbox를 전체 프레임 기준으로 되돌린 뒤 화면 좌표로 옮긴다.
+export function renderOverlay(container, plants, { videoEl, crop = null, onSelect } = {}) {
   container.replaceChildren();
   if (!Array.isArray(plants) || plants.length === 0) return;
 
   const elemW = container.clientWidth;
   const elemH = container.clientHeight;
-  const videoW = videoEl?.videoWidth || elemW;
-  const videoH = videoEl?.videoHeight || elemH;
+  const videoW = videoEl?.videoWidth || crop?.videoW || elemW;
+  const videoH = videoEl?.videoHeight || crop?.videoH || elemH;
   const geometry = computeCoverGeometry({ videoW, videoH, elemW, elemH });
 
   const entries = plants.map((plant) => ({
-    rect: mapBBox(plant.bbox, geometry),
+    rect: mapBBox(cropToVideoBBox(plant.bbox, crop), geometry),
     tip: makeTip(plant, onSelect),
   }));
 

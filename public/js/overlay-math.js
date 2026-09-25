@@ -35,6 +35,20 @@ export function mapBBox(bbox, geometry) {
   };
 }
 
+// 잘린 이미지 기준 정규화 bbox -> 전체 비디오 프레임 기준 정규화 bbox (captureFrame의 crop으로 되돌린다).
+// crop이 없거나 videoW/videoH가 0 이하면 bbox 객체를 그대로 돌려준다. 입력은 바꾸지 않는다.
+export function cropToVideoBBox(bbox, crop) {
+  if (!crop || !isPositive(crop.videoW) || !isPositive(crop.videoH)) return bbox;
+  const { x = 0, y = 0, w = 0, h = 0 } = bbox || {};
+  const { videoW, videoH, sx = 0, sy = 0, sw = videoW, sh = videoH } = crop;
+  return {
+    x: (sx + x * sw) / videoW,
+    y: (sy + y * sh) / videoH,
+    w: (w * sw) / videoW,
+    h: (h * sh) / videoH,
+  };
+}
+
 // [lo, hi] 범위로 클램프한다. 범위가 뒤집혀 있으면 (툴팁이 요소보다 클 때) lo를 돌려준다.
 function clampRange(v, lo, hi) {
   if (hi < lo) return lo;

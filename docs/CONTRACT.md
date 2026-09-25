@@ -143,7 +143,8 @@ export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, v
 // 보이는 영역만 잘라 보낸다: 비디오 중앙에서 view의 종횡비를 가진 최대 사각형(sx, sy, sw, sh, 비디오 픽셀 단위)을
 // 잘라 긴 변이 maxSide가 되도록 축소한다 (확대는 하지 않음). viewW 또는 viewH가 0이면 자르지 않는다
 // (sx = sy = 0, sw = videoW, sh = videoH).
-// imageData는 품질 분석용으로 잘린 영역을 긴 변 160px로 축소한 별도 샘플이다.
+// imageData는 품질 분석용으로 잘린 영역을 항상 160x120으로 축소한 별도 샘플이다 (비율 무시).
+// 크기를 고정해야 회전이나 주소창 표시로 보이는 영역의 비율이 바뀌어도 frameDiff가 씬 변화로 오판하지 않는다.
 // videoEl.videoWidth가 0이면 null 반환.
 
 export async function setTorch(track, on)
