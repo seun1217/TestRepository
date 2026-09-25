@@ -216,4 +216,4 @@ export async function identify({ base64, width, height, lang = "ko", signal })
 ## 5. 문체 규칙
 
 - 사용자에게 보이는 모든 문자열은 한국어, 존댓말.
-- 어떤 파일에서도 em dash(—)와 en dash(–)를 쓰지 않는다. 쉼표, 마침표, 괄호, 세미콜론으로 대체.
+- 어떤 파일에서도 em dash(U+2014)와 en dash(U+2013)를 쓰지 않는다. 쉼표, 마침표, 괄호, 세미콜론으로 대체.
