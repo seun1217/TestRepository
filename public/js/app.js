@@ -119,7 +119,7 @@ function closeDetail() {
 function handleResult(result) {
   if (result.quality !== "ok") {
     paintResult(null);
-    showHint(result.message_ko || hintFor(result.quality, { torchSupported: state.torchSupported }));
+    showHint(result.message_ko || hintFor(result.quality, { torchSupported: state.torchSupported, torchOn: state.torchOn }));
     setStatus("");
     return;
   }
@@ -167,7 +167,7 @@ function toggleAuto() {
 
 function buildScanner() {
   return createScanner({
-    capture: () => captureFrame(videoEl),
+    capture: (opts) => captureFrame(videoEl, opts),
     analyze: analyzeFrame,
     diff: frameDiff,
     // 결과에 보낸 프레임을 붙여 둔다: overlay는 crop으로 좌표를 되돌리고, describe는 같은 이미지를 다시 보낸다.
@@ -183,6 +183,7 @@ function buildScanner() {
     },
     onSceneChange: handleSceneChange,
     torchSupported: () => state.torchSupported,
+    torchOn: () => state.torchOn,
     onResult: handleResult,
     onError: handleError,
     onBusy: (busy) => {

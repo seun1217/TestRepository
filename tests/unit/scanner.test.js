@@ -314,7 +314,7 @@ test("서버 안내 뒤 같은 씬은 retryHoldMs가 지나면 자동으로 다�
   assert.equal(calls.identify.length, 2);
 });
 
-test("로컬 안내가 서버 안내를 덮어쓰면 다시 ok가 되었을 때 안내를 해제한다", async () => {
+test("로컬 안내가 서버 안내를 잠깐 덮어도, 재시도 대기 중에 다시 ok가 되면 서버 안내를 되살린다", async () => {
   const { clock, scene, calls, scanner, setIdentify } = setup();
   setIdentify(async () => ({ quality: "no_plant", message_ko: "식물이 없습니다.", plants: [] }));
   scanner.start();
@@ -325,7 +325,41 @@ test("로컬 안내가 서버 안내를 덮어쓰면 다시 ok가 되었을 때 
   assert.equal(calls.hints.at(-1), hintFor("blurry"));
   scene.verdict = "ok";
   await clock.advance(250);
+  assert.equal(calls.hints.at(-1), "식물이 없습니다."); // 대기 중이라 화면이 비지 않는다
+  scene.v = 0.9; // 씬이 바뀌면 서버 안내도 사라진다
+  await clock.advance(250);
   assert.equal(calls.hints.at(-1), null);
+});
+
+test("정지 화면이 4초 넘게 계속 흐림이면 질감이 적은 장면으로 보고 서버에 보낸다", async () => {
+  const { clock, scene, calls, scanner } = setup();
+  scene.verdict = "blurry";
+  scanner.start();
+  await clock.advance(3750);
+  assert.equal(calls.identify.length, 0);
+  assert.equal(calls.hints.at(-1), hintFor("blurry"));
+  await clock.advance(1000); // t=4750: 안정 + 유예 시간 경과
+  assert.equal(calls.identify.length, 1);
+});
+
+test("오류가 반복되면 백오프가 두 배씩 늘어나고, start()는 백오프를 초기화한다", async () => {
+  const { clock, calls, scanner, setIdentify } = setup();
+  setIdentify(async () => {
+    throw new Error("boom");
+  });
+  scanner.start();
+  await clock.advance(500); // 1번째 (t=500)
+  assert.equal(calls.identify.length, 1);
+  await clock.advance(5000); // t=5500: 5초 뒤 2번째
+  assert.equal(calls.identify.length, 2);
+  await clock.advance(9750); // t=15250 < 5500 + 10000
+  assert.equal(calls.identify.length, 2);
+  await clock.advance(250); // t=15500: 10초 뒤 3번째
+  assert.equal(calls.identify.length, 3);
+  scanner.stop();
+  scanner.start(); // 사용자가 다시 켰다: 백오프 없이 간격만 지나면 요청
+  await clock.advance(2750);
+  assert.equal(calls.identify.length, 4);
 });
 
 test("로컬 안내가 잠깐 떠도 같은 씬이면 결과를 유지하고 재요청하지 않는다", async () => {
@@ -378,7 +412,7 @@ test("같은 씬에서 비-ok 응답이 반복되면 재시도 간격이 두 배
   assert.equal(calls.identify.length, 6);
 });
 
-test("stop() 뒤에 도착한 응답은 버리되 바쁨 표시는 해제한다", async () => {
+test("stop() 뒤에 도착한 응답도 전달한다 (과금된 호출을 버리지 않음) 그리고 바쁨 표시를 해제한다", async () => {
   const { clock, calls, scanner, setIdentify } = setup();
   let resolveFirst;
   setIdentify(() => new Promise((resolve) => (resolveFirst = resolve)));
@@ -388,8 +422,9 @@ test("stop() 뒤에 도착한 응답은 버리되 바쁨 표시는 해제한다"
   scanner.stop();
   resolveFirst({ ...OK_RESULT });
   await flush();
-  assert.equal(calls.results.length, 0);
+  assert.equal(calls.results.length, 1);
   assert.deepEqual(calls.busy, [true, false]);
+  assert.equal(scanner.isRunning(), false);
 });
 
 test("stop() 뒤에 도착한 오류도 버린다", async () => {

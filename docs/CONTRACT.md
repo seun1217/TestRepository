@@ -136,7 +136,8 @@ export async function startCamera(videoEl, { facingMode = "environment" } = {})
 // -> { stream, track, torchSupported: boolean }
 // 실패 시 Error를 throw. error.code: "denied" | "not_found" | "insecure" | "unknown"
 
-export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, viewH } = {})
+export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, viewH, encode = true } = {})
+// encode: false이면 JPEG 인코딩을 생략하고 dataUrl과 base64가 null이다 (스캐너의 250ms 샘플링용).
 // -> { dataUrl: "data:image/jpeg;base64,...", base64: "...", width, height, imageData: ImageData,
 //      crop: { sx, sy, sw, sh, videoW, videoH } }
 // viewW/viewH 기본값은 videoEl.clientWidth/clientHeight (object-fit: cover로 실제 보이는 영역의 크기).
@@ -167,7 +168,8 @@ export function analyzeFrame({ data, width, height })
 export function frameDiff(a, b)
 // a, b: { data, width, height } 같은 크기. -> 0..1 (평균 절대 차이 / 255). 크기가 다르면 1 반환.
 
-export function hintFor(verdictOrQuality, { torchSupported = false } = {})
+export function hintFor(verdictOrQuality, { torchSupported = false, torchOn = false } = {})
+// torchOn이면 too_dark: "너무 어둡습니다. 플래시를 켠 채로 식물에 더 가까이 가거나 더 밝은 곳에서 비춰 주세요."
 // -> 한국어 안내 문구 문자열 또는 null (ok일 때).
 // too_dark: torchSupported면 "너무 어둡습니다. 플래시를 켜거나 더 밝은 곳에서 비춰 주세요."
 //           아니면 "너무 어둡습니다. 더 밝은 곳에서 비추거나 기기 손전등을 켜 주세요."
@@ -198,6 +200,9 @@ export function createScanner({
 // - 안정(stableDiff 이하)이고 마지막 요청으로부터 minIntervalMs 이상 지났을 때만 identify 호출.
 // - 결과가 있으면 씬이 sceneChangeDiff 이상 바뀔 때까지 다시 요청하지 않는다.
 // - identify 응답의 quality가 ok가 아니면 onHint(response.message_ko).
+// - 정지 화면이 blurGraceMs(4초) 넘게 계속 흐림으로 판정되면 질감이 적은 장면으로 보고 서버에 보낸다.
+// - 오류 백오프는 5초부터 두 배씩(최대 60초), 성공하면 초기화. start()는 대기와 백오프를 초기화한다.
+// - stop() 뒤에 도착한 응답도 onResult로 전달한다 (이미 과금된 호출을 버리지 않는다).
 // - 동시에 두 요청을 보내지 않는다. scanNow()는 간격/안정 조건을 무시하고 즉시 한 번 요청한다.
 ```
 

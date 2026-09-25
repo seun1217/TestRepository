@@ -151,7 +151,8 @@ function computeCropRect(videoW, videoH, viewW, viewH) {
 }
 
 // 보이는 영역(object-fit: cover)만 잘라 JPEG로 만든다. bbox는 이 잘린 이미지 기준이므로 crop을 함께 돌려준다.
-export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, viewH } = {}) {
+// encode: false이면 JPEG 인코딩을 생략하고 dataUrl/base64를 null로 둔다 (품질 샘플링 전용).
+export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, viewH, encode = true } = {}) {
   const vw = videoEl?.videoWidth | 0;
   const vh = videoEl?.videoHeight | 0;
   if (vw <= 0 || vh <= 0) return null;
@@ -164,8 +165,8 @@ export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, v
     const full = fitSize(crop.sw, crop.sh, maxSide);
     resizeCanvas(captureCanvas, full.w, full.h);
     captureCtx.drawImage(videoEl, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, full.w, full.h);
-    const dataUrl = captureCanvas.toDataURL("image/jpeg", quality);
-    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    const dataUrl = encode ? captureCanvas.toDataURL("image/jpeg", quality) : null;
+    const base64 = dataUrl ? dataUrl.slice(dataUrl.indexOf(",") + 1) : null;
 
     // 분석 샘플은 이미 잘려 축소된 캡처 캔버스에서 한 번 더 줄여 앨리어싱을 줄인다.
     resizeCanvas(sampleCanvas, SAMPLE_W, SAMPLE_H);

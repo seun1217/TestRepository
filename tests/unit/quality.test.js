@@ -124,3 +124,10 @@ test("hintFor: ok와 알 수 없는 값은 null", () => {
   assert.equal(hintFor(undefined), null);
   assert.equal(hintFor(null), null);
 });
+
+test("hintFor too_dark: 플래시가 켜져 있으면 다른 문구를 준다", () => {
+  assert.equal(
+    hintFor("too_dark", { torchSupported: true, torchOn: true }),
+    "너무 어둡습니다. 플래시를 켠 채로 식물에 더 가까이 가거나 더 밝은 곳에서 비춰 주세요.",
+  );
+});

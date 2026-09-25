@@ -81,8 +81,10 @@ export function renderOverlay(container, plants, { videoEl, crop = null, onSelec
   });
   const resolved = resolveOverlaps(placements, { gap: TIP_GAP });
   entries.forEach(({ tip }, i) => {
+    // 겹침 해소로 아래로 밀린 툴팁이 컨테이너 밖(overflow: hidden)으로 나가지 않게 한다. 겹치는 편이 안 보이는 것보다 낫다.
+    const maxTop = Math.max(TIP_MARGIN, elemH - resolved[i].height - TIP_MARGIN);
     tip.style.left = px(resolved[i].left);
-    tip.style.top = px(resolved[i].top);
+    tip.style.top = px(Math.min(resolved[i].top, maxTop));
   });
 }
 

@@ -97,6 +97,7 @@ body {
   backdrop-filter: blur(6px);
 }
 .hint[data-kind="error"] { border-left: 4px solid var(--danger); }
+.hint { pointer-events: none; } /* 안내 배너가 그 아래의 툴팁 터치를 가로채지 않게 한다 */
 .hint[hidden] { display: none; }
 
 .status {

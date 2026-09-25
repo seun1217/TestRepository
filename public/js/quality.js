@@ -5,6 +5,7 @@ export const THRESHOLDS = { darkLuma: 40, blurVar: 60 };
 const HINTS = {
   too_dark_torch: "너무 어둡습니다. 플래시를 켜거나 더 밝은 곳에서 비춰 주세요.",
   too_dark: "너무 어둡습니다. 더 밝은 곳에서 비추거나 기기 손전등을 켜 주세요.",
+  too_dark_torch_on: "너무 어둡습니다. 플래시를 켠 채로 식물에 더 가까이 가거나 더 밝은 곳에서 비춰 주세요.",
   too_far: "식물이 너무 멀리 있습니다. 더 가까이 다가가 주세요.",
   blurry: "화면이 흔들립니다. 카메라를 잠시 고정해 주세요.",
   no_plant: "화면에서 식물을 찾지 못했습니다. 식물이 화면 가운데 오도록 비춰 주세요.",
@@ -73,9 +74,10 @@ export function frameDiff(a, b) {
   return Math.min(1, Math.max(0, diff));
 }
 
-export function hintFor(verdictOrQuality, { torchSupported = false } = {}) {
+export function hintFor(verdictOrQuality, { torchSupported = false, torchOn = false } = {}) {
   switch (verdictOrQuality) {
     case "too_dark":
+      if (torchOn) return HINTS.too_dark_torch_on;
       return torchSupported ? HINTS.too_dark_torch : HINTS.too_dark;
     case "too_far":
       return HINTS.too_far;
