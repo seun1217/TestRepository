@@ -1,5 +1,6 @@
 // 서버 프록시 호출. docs/CONTRACT.md 2절.
-const DEFAULT_TIMEOUT_MS = 20000;
+// 비전 모델 응답은 수십 초가 걸릴 수 있다. 서버의 SDK 타임아웃(60초)보다 짧게 둔다.
+const DEFAULT_TIMEOUT_MS = 45000;
 
 export async function identify({ base64, width, height, lang = "ko", signal, debug } = {}) {
   const controller = new AbortController();

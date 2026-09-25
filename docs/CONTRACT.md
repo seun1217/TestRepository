@@ -203,7 +203,7 @@ export function closeSheet(sheetEl)
 
 ```js
 export async function identify({ base64, width, height, lang = "ko", signal })
-// POST /api/identify. 20초 타임아웃. 비정상 응답이면 Error를 throw하고 error.code, error.message_ko를 채운다.
+// POST /api/identify. 45초 타임아웃 (서버 SDK 타임아웃 60초보다 짧게). 비정상 응답이면 Error를 throw하고 error.code, error.message_ko를 채운다.
 ```
 
 ### `app.js` (오케스트레이터)

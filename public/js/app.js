@@ -72,10 +72,17 @@ function handleResult(result) {
   paintResult(result);
 }
 
+// 요청 실패: 안내만 띄우고 이미 그려진 결과는 그대로 둔다 (스캐너가 백오프 후 다시 시도한다).
 function handleError(err) {
-  paintResult(null);
   showHint(err?.message_ko || "알 수 없는 오류가 발생했습니다.", "error");
-  setStatus("");
+  if (!state.lastResult) setStatus("");
+}
+
+// 씬이 바뀌어 스캐너가 결과를 버렸다: 오버레이를 지우고 다음 결과를 기다린다.
+function handleSceneChange() {
+  paintResult(null);
+  showHint(null);
+  setStatus(state.autoScan ? "자동 인식 중" : "");
 }
 
 async function toggleTorch() {
@@ -109,14 +116,13 @@ function buildScanner() {
     analyze: analyzeFrame,
     diff: frameDiff,
     identify: ({ base64, width, height }) => identify({ base64, width, height }),
+    // 로컬 품질 안내: 툴팁은 유지한 채 안내만 띄운다. 씬이 실제로 바뀌면 onSceneChange가 지운다.
     onHint: (msg) => {
-      if (msg) {
-        paintResult(null);
-        showHint(msg);
-      } else if (hintEl.dataset.kind !== "error") {
-        showHint(null);
-      }
+      if (msg) showHint(msg);
+      else if (hintEl.dataset.kind !== "error") showHint(null);
     },
+    onSceneChange: handleSceneChange,
+    torchSupported: () => state.torchSupported,
     onResult: handleResult,
     onError: handleError,
     onBusy: (busy) => {

@@ -21,7 +21,7 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: "IDENTIFY_PROVIDER=mock PORT=3456 node server.js",
+    command: "IDENTIFY_PROVIDER=mock RATE_LIMIT_PER_MIN=0 PORT=3456 node server.js",
     url: "http://127.0.0.1:3456/api/health",
     reuseExistingServer: false,
     timeout: 20_000,

@@ -9,7 +9,28 @@ const PORT = Number(process.env.PORT || 3000);
 const PROVIDER_NAME = (process.env.IDENTIFY_PROVIDER || "claude").toLowerCase();
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5";
 
+// 프록시 뒤에서만 X-Forwarded-For를 믿는다. TRUST_PROXY=1 (hop 수), true, 또는 "loopback, 10.0.0.0/8" 같은 목록.
+function parseTrustProxy(raw) {
+  if (raw == null || String(raw).trim() === "") return null;
+  const v = String(raw).trim();
+  if (/^\d+$/.test(v)) return Number(v);
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return v;
+}
+const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY);
+
+// IP당 분당 요청 수. RATE_LIMIT_PER_MIN=0이면 제한을 끈다. 잘못된 값이면 기본값 20.
+function parseRateLimit(raw) {
+  if (raw == null || String(raw).trim() === "") return 20;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 20;
+}
+const RATE_LIMIT_PER_MIN = parseRateLimit(process.env.RATE_LIMIT_PER_MIN);
+const RATE_WINDOW_MS = 60_000;
+
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const MIN_CONFIDENCE = 0.35;
 const MAX_PLANTS = 6;
 
@@ -29,6 +50,13 @@ const identifyWithProvider = await loadProvider(PROVIDER_NAME);
 
 const app = express();
 app.disable("x-powered-by");
+if (TRUST_PROXY != null) app.set("trust proxy", TRUST_PROXY);
+
+// API 응답은 캐시하지 않는다. 본문 파싱 오류 응답에도 적용되도록 express.json보다 먼저 건다.
+app.use("/api", (_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
 app.use(express.json({ limit: "6mb" }));
 
 app.get("/api/health", (_req, res) => {
@@ -98,14 +126,46 @@ export function normalizeResponse(raw, model) {
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
-app.post("/api/identify", async (req, res) => {
+// 메모리 고정 윈도우 요청 제한 (IP당 분당 RATE_LIMIT_PER_MIN회). 프로세스 하나 기준이며 재시작하면 초기화된다.
+const rateBuckets = new Map();
+function sweepRateBuckets(now) {
+  for (const [key, bucket] of rateBuckets) {
+    if (bucket.resetAt <= now) rateBuckets.delete(key);
+  }
+}
+const rateSweeper = setInterval(() => sweepRateBuckets(Date.now()), RATE_WINDOW_MS);
+rateSweeper.unref();
+
+function rateLimitIdentify(req, res, next) {
+  if (RATE_LIMIT_PER_MIN <= 0) return next();
+  const now = Date.now();
+  const key = req.ip || req.socket?.remoteAddress || "unknown";
+  let bucket = rateBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    bucket = { count: 0, resetAt: now + RATE_WINDOW_MS };
+    rateBuckets.set(key, bucket);
+  }
+  bucket.count += 1;
+  res.set("X-RateLimit-Limit", String(RATE_LIMIT_PER_MIN));
+  res.set("X-RateLimit-Remaining", String(Math.max(0, RATE_LIMIT_PER_MIN - bucket.count)));
+  if (bucket.count > RATE_LIMIT_PER_MIN) {
+    res.set("Retry-After", String(Math.max(1, Math.ceil((bucket.resetAt - now) / 1000))));
+    return sendError(res, 429, "rate_limited", "요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.");
+  }
+  next();
+}
+
+app.post("/api/identify", rateLimitIdentify, async (req, res) => {
   const body = req.body || {};
   let image = typeof body.image === "string" ? body.image.trim() : "";
   const dataUrlMatch = image.match(/^data:(image\/[a-z]+);base64,(.*)$/s);
   let mediaType = "image/jpeg";
   if (dataUrlMatch) {
-    mediaType = dataUrlMatch[1];
+    mediaType = dataUrlMatch[1] === "image/jpg" ? "image/jpeg" : dataUrlMatch[1];
     image = dataUrlMatch[2];
+  }
+  if (!IMAGE_MEDIA_TYPES.has(mediaType)) {
+    return sendError(res, 400, "bad_request", "지원하지 않는 이미지 형식입니다. JPEG, PNG, WebP, GIF만 보낼 수 있습니다.");
   }
   image = image.replace(/\s+/g, "");
   if (!image) return sendError(res, 400, "bad_request", "이미지가 비어 있습니다.");

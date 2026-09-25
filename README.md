@@ -47,6 +47,7 @@ npm run dev            # IDENTIFY_PROVIDER=mock, 고정된 두 식물을 반환
 | `IDENTIFY_PROVIDER` | `claude` | `claude` 또는 `mock` |
 | `CLAUDE_MODEL` | `claude-opus-5` | 비전 인식에 쓸 모델 |
 | `PORT` | `3000` | 서버 포트 |
+| `RATE_LIMIT_PER_MIN` | `20` | IP당 분당 인식 요청 제한, `0`이면 해제 |
 | `TRUST_PROXY` | 없음 | 프록시 뒤에 있을 때 `1` |
 
 ## 테스트
