@@ -55,6 +55,7 @@ function paintResult(result) {
   }
   renderOverlay(overlayEl, result.plants, {
     videoEl,
+    crop: result.frame?.crop || null,
     onSelect: (plant) => openSheet(sheetEl, plant),
   });
   const names = result.plants.map((p) => p.name_ko).join(", ");
@@ -115,7 +116,12 @@ function buildScanner() {
     capture: () => captureFrame(videoEl),
     analyze: analyzeFrame,
     diff: frameDiff,
-    identify: ({ base64, width, height }) => identify({ base64, width, height }),
+    // 결과에 보낸 프레임을 붙여 둔다: overlay는 crop으로 좌표를 되돌리고, describe는 같은 이미지를 다시 보낸다.
+    identify: async ({ base64, width, height, crop }) => {
+      const result = await identify({ base64, width, height });
+      if (result && typeof result === "object") result.frame = { base64, width, height, crop: crop || null };
+      return result;
+    },
     // 로컬 품질 안내: 툴팁은 유지한 채 안내만 띄운다. 씬이 실제로 바뀌면 onSceneChange가 지운다.
     onHint: (msg) => {
       if (msg) showHint(msg);

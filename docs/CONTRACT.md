@@ -8,6 +8,8 @@
 - 모바일 우선 PWA. 브라우저에서 `getUserMedia`로 후면 카메라를 열고, 프레임을 캡처해 서버로 보냅니다.
 - Node 22 + Express 5 서버가 정적 파일을 서빙하고 `POST /api/identify`에서 비전 모델을 호출합니다. API 키는 서버에만 있습니다.
 - 클라이언트는 ES 모듈(`<script type="module">`). 순수 함수 모듈(`overlay-math.js`, `quality.js`)은 Node `node:test`에서도 import 가능해야 합니다 (DOM, window 참조 금지).
+- 두 단계 인식: `POST /api/identify`는 이름, 학명, 요약, bbox만 빠르게 돌려주고(툴팁용), 상세 설명은 사용자가 툴팁을 터치했을 때 `POST /api/describe`로 따로 받습니다. 첫 결과가 빨리 떠야 "비추기만 하면" 동작하는 느낌이 납니다.
+- 보내는 이미지는 사용자가 보는 화면과 같아야 합니다. 비디오는 `object-fit: cover`로 잘려 보이므로 `captureFrame`이 보이는 영역만 잘라 보냅니다. 따라서 bbox(0..1)는 잘린 이미지 기준이고, `crop` 정보로 원본 프레임 좌표로 되돌릴 수 있습니다.
 
 ## 2. HTTP API
 
@@ -63,6 +65,33 @@
 - `plants[].id`: 응답 내 고유 문자열 (`p1`, `p2`, ...).
 - `plants`는 `confidence` 내림차순, 최대 6개.
 - `usage`는 제공자가 주지 않으면 0으로 채웁니다.
+- `plants[].detail_ko`: 1단계에서는 비어 있을 수 있습니다(`""`). Claude 제공자는 1단계 스키마에 detail_ko를 넣지 않으며 서버가 `""`로 채웁니다. mock 제공자는 상세를 미리 채워 줍니다. 클라이언트는 비어 있을 때만 `POST /api/describe`를 부릅니다.
+- `plants[].summary_ko`: 한 문장.
+
+### `POST /api/describe`
+
+툴팁을 터치했을 때 상세 설명을 받습니다. 요청 (JSON):
+
+```json
+{
+  "image": "<identify 때 보낸 것과 같은 base64 JPEG>",
+  "width": 1024,
+  "height": 768,
+  "lang": "ko",
+  "plant": { "id": "p1", "name_ko": "동백나무", "name_sci": "Camellia japonica", "bbox": { "x": 0.12, "y": 0.20, "w": 0.35, "h": 0.50 } }
+}
+```
+
+- `plant.name_ko`는 필수, 나머지는 있으면 사용합니다. 검증 규칙(이미지, width, height)은 identify와 같습니다.
+
+응답 200:
+
+```json
+{ "detail_ko": "2~3개의 짧은 문단, 빈 줄로 구분", "model": "claude-opus-5", "usage": { "input_tokens": 0, "output_tokens": 0 } }
+```
+
+- `detail_ko`가 비어 있으면 서버가 502 `upstream_error`로 바꿉니다.
+- 오류 응답과 코드는 identify와 같습니다. identify와 같은 IP별 요청 제한 버킷을 공유합니다(둘을 합쳐 분당 `RATE_LIMIT_PER_MIN`회).
 
 오류 응답 (JSON):
 
@@ -85,6 +114,8 @@
 ```js
 // export default async function identify({ imageBase64, mediaType, width, height, lang }) -> IdentifyResponse
 // 위 응답 스키마 그대로 (quality, message_ko, plants, model, usage). 검증과 클램프는 server.js가 한 번 더 수행합니다.
+// export async function describe({ imageBase64, mediaType, width, height, lang, plant }) -> { detail_ko, model, usage }
+// plant: { id?, name_ko, name_sci?, bbox? }. 같은 이미지에서 그 식물만 골라 2~3문단 설명을 돌려줍니다.
 ```
 
 - `providers/claude.js`: Anthropic SDK. 모델은 `process.env.CLAUDE_MODEL || "claude-opus-5"`.
@@ -93,6 +124,8 @@
     - `p1` 동백나무 bbox `{x:0.10, y:0.15, w:0.35, h:0.50}` confidence 0.91
     - `p2` 수국 bbox `{x:0.55, y:0.30, w:0.35, h:0.45}` confidence 0.78
   - 특수 입력: base64 디코딩 후 첫 바이트 검사 없이, 요청에 `"debug": "too_dark" | "too_far" | "blurry" | "no_plant"` 필드가 있으면 그 quality를 반환합니다 (mock에서만).
+  - `"debug": "lazy"`이면 두 식물의 `detail_ko`를 `""`로 비워 반환합니다 (클라이언트의 describe 경로 테스트용).
+  - mock `describe`는 `plant.name_ko`가 동백나무 또는 수국이면 위 상세 문단을, 아니면 "이 식물에 대한 상세 설명을 준비하지 못했습니다." 한 문단을 돌려줍니다. 요청에 `"debug": "error"`가 있으면 502 `upstream_error`를 던집니다.
 
 ## 4. 클라이언트 모듈 인터페이스 (`public/js/`)
 
@@ -103,9 +136,14 @@ export async function startCamera(videoEl, { facingMode = "environment" } = {})
 // -> { stream, track, torchSupported: boolean }
 // 실패 시 Error를 throw. error.code: "denied" | "not_found" | "insecure" | "unknown"
 
-export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85 } = {})
-// -> { dataUrl: "data:image/jpeg;base64,...", base64: "...", width, height, imageData: ImageData }
-// imageData는 품질 분석용으로 긴 변 160px로 축소한 별도 샘플이다 (전체 프레임 축소본이 아님).
+export function captureFrame(videoEl, { maxSide = 1024, quality = 0.85, viewW, viewH } = {})
+// -> { dataUrl: "data:image/jpeg;base64,...", base64: "...", width, height, imageData: ImageData,
+//      crop: { sx, sy, sw, sh, videoW, videoH } }
+// viewW/viewH 기본값은 videoEl.clientWidth/clientHeight (object-fit: cover로 실제 보이는 영역의 크기).
+// 보이는 영역만 잘라 보낸다: 비디오 중앙에서 view의 종횡비를 가진 최대 사각형(sx, sy, sw, sh, 비디오 픽셀 단위)을
+// 잘라 긴 변이 maxSide가 되도록 축소한다 (확대는 하지 않음). viewW 또는 viewH가 0이면 자르지 않는다
+// (sx = sy = 0, sw = videoW, sh = videoH).
+// imageData는 품질 분석용으로 잘린 영역을 긴 변 160px로 축소한 별도 샘플이다.
 // videoEl.videoWidth가 0이면 null 반환.
 
 export async function setTorch(track, on)
@@ -144,7 +182,7 @@ export function createScanner({
   capture,          // () => captureFrame 결과 또는 null
   analyze,          // (imageData) => analyzeFrame 결과
   diff,             // (a, b) => frameDiff 결과
-  identify,         // ({ base64, width, height }) => Promise<IdentifyResponse>
+  identify,         // ({ base64, width, height, crop }) => Promise<IdentifyResponse>  crop은 captureFrame이 준 것을 그대로 넘긴다
   onHint,           // (message_ko | null) => void   품질 안내 표시/해제
   onResult,         // (IdentifyResponse) => void
   onError,          // (Error) => void
@@ -175,13 +213,23 @@ export function mapBBox(bbox, geometry)
 export function anchorTooltip(rect, { elemW, elemH, tipW, tipH, margin = 8 })
 // rect: mapBBox 결과. 툴팁을 bbox 상단 중앙에 두되 화면 밖으로 나가면 안쪽으로 이동.
 // -> { left, top } (툴팁 좌상단, 요소 기준). 항상 [margin, elemW - tipW - margin] 범위로 클램프.
+
+export function cropToVideoBBox(bbox, crop)
+// bbox: 잘린 이미지 기준 정규화 좌표. crop: captureFrame의 crop. -> 전체 비디오 프레임 기준 정규화 bbox.
+// x' = (sx + x*sw)/videoW, y' = (sy + y*sh)/videoH, w' = w*sw/videoW, h' = h*sh/videoH.
+// crop이 null이거나 videoW/videoH가 0이면 bbox를 그대로 반환. 그 뒤 computeCoverGeometry + mapBBox로 화면 좌표를 얻는다.
+
+export function resolveOverlaps(placements, { gap = 4 } = {})
+// 앞선 툴팁과 겹치는 툴팁을 아래로 밀어낸다 (구현됨).
 ```
 
 ### `overlay.js` (브라우저 전용)
 
 ```js
-export function renderOverlay(container, plants, { videoEl, onSelect })
+export function renderOverlay(container, plants, { videoEl, crop, onSelect })
 // container: position:relative인 오버레이 div (비디오와 같은 크기). 기존 내용을 지우고 다시 그린다.
+// crop이 있으면 각 bbox를 cropToVideoBBox로 전체 프레임 기준으로 바꾼 뒤 computeCoverGeometry + mapBBox를 적용한다.
+// (뷰 크기가 캡처 때와 같으면 결과적으로 left = x*elemW, top = y*elemH가 된다. 회전 뒤에도 같은 식이 맞는 위치를 준다.)
 // 각 식물마다 .plant-box (테두리)와 .plant-tip (툴팁 버튼, 텍스트는 name_ko, data-plant-id 속성)을 그린다.
 // 툴팁 클릭/터치 시 onSelect(plant) 호출. 툴팁은 role="button", tabindex="0", 키보드 Enter/Space도 처리.
 // 리사이즈 및 회전 시 재배치가 필요하므로 renderOverlay는 멱등이어야 한다.
@@ -194,7 +242,16 @@ export function clearOverlay(container)
 ```js
 export function openSheet(sheetEl, plant)
 // sheetEl 내부에 name_ko, name_sci(이탤릭), name_en, family_ko, confidence(%), tags, summary_ko, detail_ko를 채우고 표시.
-// 닫기 버튼(.sheet-close), 배경 탭, Escape 키로 닫힘. aria-hidden 토글.
+// sheetEl.dataset.plantId = plant.id. detail_ko가 비어 있으면 상세 영역에 p.sheet-loading("상세 설명을 불러오는 중입니다")을 보여준다.
+// 닫기 버튼(.sheet-close), 배경 탭, Escape 키로 닫힘(리스너는 app.js). aria-hidden 토글.
+
+export function setSheetDetail(sheetEl, plantId, { detail_ko, error, onRetry })
+// 현재 시트의 dataset.plantId가 plantId와 같을 때만 상세 영역을 갱신한다 (늦게 온 응답이 다른 식물을 덮어쓰지 않도록).
+// detail_ko가 있으면 문단으로, error(문자열)가 있으면 p.sheet-error와 button.sheet-retry("다시 시도", 클릭 시 onRetry())를 그린다.
+// -> boolean (갱신했으면 true)
+
+export function getSheetPlantId(sheetEl)
+// -> 현재 열린(또는 닫히는 중인) 식물 id 또는 null
 
 export function closeSheet(sheetEl)
 ```
@@ -203,13 +260,23 @@ export function closeSheet(sheetEl)
 
 ```js
 export async function identify({ base64, width, height, lang = "ko", signal })
-// POST /api/identify. 45초 타임아웃 (서버 SDK 타임아웃 60초보다 짧게). 비정상 응답이면 Error를 throw하고 error.code, error.message_ko를 채운다.
+// POST /api/identify. 45초 타임아웃. 비정상 응답이면 Error를 throw하고 error.code, error.message_ko를 채운다.
+
+export async function describe({ base64, width, height, plant, lang = "ko", signal })
+// POST /api/describe. 45초 타임아웃. -> { detail_ko, model, usage }. 오류 처리는 identify와 같다.
+
+// 타임아웃 정렬: 브라우저 45초, 서버의 SDK 클라이언트는 timeout 40초에 maxRetries 0
+// (재시도된 타임아웃 호출이 브라우저가 포기한 뒤에도 과금되는 일을 막는다. 일시 오류 재시도는 스캐너의 5초 백오프가 맡는다). 비정상 응답이면 Error를 throw하고 error.code, error.message_ko를 채운다.
 ```
 
 ### `app.js` (오케스트레이터)
 
 - DOM id: `#video`, `#overlay`, `#hint`, `#status`, `#sheet`, `#btn-scan`, `#btn-torch`, `#btn-toggle-auto`.
 - 카메라 시작 -> 스캐너 시작 -> 결과를 overlay에 그림 -> 툴팁 선택 시 sheet 열기.
+- identify 호출을 감싸 결과에 `result.frame = { base64, width, height, crop }`를 붙인다 (describe와 overlay가 쓴다).
+- 툴팁 선택: openSheet(plant). plant.detail_ko가 비어 있으면 api.describe({ ...state.lastResult.frame, plant })를 부르고,
+  성공하면 plant.detail_ko에 캐시한 뒤 setSheetDetail, 실패하면 setSheetDetail에 error와 onRetry를 넘긴다.
+- 시트가 열려 있는 동안 스캐너를 멈추고(사용자가 읽는 동안 씬이 바뀌어도 요청하지 않음), 닫히면 autoScan이면 다시 시작한다.
 - 리사이즈/회전 시 마지막 결과로 overlay를 다시 그림.
 - 오류 시 `#hint`에 한국어 안내.
 
