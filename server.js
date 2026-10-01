@@ -2,9 +2,24 @@
 // API 키는 이 프로세스에만 존재하며 브라우저로 전달되지 않는다.
 import express from "express";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// .env가 있으면 읽는다 (Windows PowerShell에서도 별도 명령 없이 동작하도록). 이미 설정된 환경 변수는 덮어쓰지 않는다.
+function loadDotEnv(file) {
+  if (!fs.existsSync(file)) return;
+  for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!m || line.trim().startsWith("#")) continue;
+    const value = m[2].replace(/^(['"])(.*)\1$/, "$2");
+    if (process.env[m[1]] === undefined && value !== "") process.env[m[1]] = value;
+  }
+}
+if (process.env.NODE_ENV !== "test") loadDotEnv(path.join(here, ".env"));
+// "node server.js --mock": API 키 없이 고정 응답으로 실행 (OS와 셸에 상관없이 동작).
+if (process.argv.includes("--mock")) process.env.IDENTIFY_PROVIDER = "mock";
 const PORT = Number(process.env.PORT || 3000);
 const PROVIDER_NAME = (process.env.IDENTIFY_PROVIDER || "claude").toLowerCase();
 const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5";

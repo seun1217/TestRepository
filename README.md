@@ -27,10 +27,11 @@
 
 ```bash
 npm install
-cp .env.example .env   # ANTHROPIC_API_KEY를 채웁니다
-set -a; source .env; set +a
+cp .env.example .env   # ANTHROPIC_API_KEY를 채웁니다 (서버가 시작할 때 .env를 자동으로 읽습니다)
 npm start              # http://localhost:3000
 ```
+
+Windows PowerShell에서 `npm` 실행이 "running scripts is disabled" 오류로 막히면 `npm` 대신 `npm.cmd`를 쓰면 됩니다 (`npm.cmd install`, `npm.cmd start`). 또는 한 번만 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`를 실행해 허용합니다.
 
 API 키 없이 UI만 볼 때는 mock 제공자를 씁니다.
 
